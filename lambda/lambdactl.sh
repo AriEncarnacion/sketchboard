@@ -41,7 +41,7 @@ LAMBDA_SSH_KEY_NAME="${LAMBDA_SSH_KEY_NAME:-sketchboard}"
 LAMBDA_SSH_KEY_FILE="${LAMBDA_SSH_KEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 LAMBDA_SSH_KEY_FILE="${LAMBDA_SSH_KEY_FILE/#\~/$HOME}"
 LAMBDA_SSH_KEY_FILE="$(eval echo "$LAMBDA_SSH_KEY_FILE")"
-OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:31b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:26b}"
 LAMBDA_INSTANCE_PREFS="${LAMBDA_INSTANCE_PREFS:-gpu_1x_h100_sxm5,gpu_1x_h100_pcie,gpu_1x_a100_sxm4,gpu_1x_a100,gpu_1x_a6000,gpu_1x_a10}"
 LAMBDA_REGION="${LAMBDA_REGION:-}"
 # Regions to prefer when several have capacity, in order. Others are used only as a fallback.
@@ -297,19 +297,28 @@ cmd_mockup() {
   [[ -f "$img" ]] || die "usage: mockup <image file> [description]"
   local ip; ip="$(instance_ip)"; [[ -n "$ip" ]] || die "instance has no IP yet"
   local mime="image/jpeg"; [[ "$img" == *.png ]] && mime="image/png"
+  # Env overrides: MODEL=gemma4:26b ITER=1 DEBUG=1
   local desc="${*:-}" out="$HERE/.last-mockup.html"
-  jq -n --arg m "$mime" --arg d "$desc" --rawfile b64 <(base64 < "$img" | tr -d '\n') \
-    '{image_base64:$b64, mime:$m, description:$d}' \
+  jq -n --arg m "$mime" --arg d "$desc" --arg model "${MODEL:-}" --arg iter "${ITER:-}" --arg dbg "${DEBUG:-}" \
+    --rawfile b64 <(base64 < "$img" | tr -d '\n') \
+    '{image_base64:$b64, mime:$m, description:$d}
+     + (if $model != "" then {model:$model} else {} end)
+     + (if $iter != "" then {max_iterations:($iter|tonumber)} else {} end)
+     + (if $dbg != "" then {debug:true} else {} end)' \
   | curl -sS -N -m 900 "http://$ip:$PORT/api/mockup" \
       -H "Authorization: Bearer $GEMMA_TOKEN" -H "Content-Type: application/json" --data-binary @- \
   | while IFS= read -r line; do
       jq -r '
         if .type == "draft" then "[draft \(.iteration)] \(.seconds)s, \(.tokens) tokens, \(.html | length) chars\n  \(.notes | split("\n") | map("  " + .) | join("\n"))"
-        elif .type == "final" then "[final] iterations=\(.iterations) approved=\(.approved)"
-        elif .type == "render" then "[render \(.iteration)] png"
+        elif .type == "final" then "[final] chose draft \(.chosen) (score \(.score // "-")), approved=\(.approved), \(.iterations) judged"
+        elif .type == "checks" then "[checks \(.iteration)] \(if .clean then "clean" else "problems:\n" + .problems end)"
+        elif .type == "verdict" then "[verdict \(.iteration)] \(.seconds)s, problems:\n\(.problems | split("\n") | map("  " + .) | join("\n"))"
+        elif .type == "approved" then "[approved \(.iteration)] \(.seconds)s"
         else "[\(.type)] \(.message // .iteration // "")" end' <<< "$line"
       html="$(jq -r 'select(.type=="final") | .html' <<< "$line")"
       [[ -n "$html" ]] && printf '%s' "$html" > "$out" && echo "saved final HTML to $out (open it in a browser)"
+      png="$(jq -r 'select(.type=="checks") | .png_base64 // empty' <<< "$line")"
+      [[ -n "$png" ]] && base64 -d <<< "$png" > "$HERE/.last-render-$(jq -r .iteration <<< "$line").png"
     done
 }
 

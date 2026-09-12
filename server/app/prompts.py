@@ -20,18 +20,34 @@ Designer's notes: {description}
 First, in 3-6 short bullet points, list the UI elements you see and their arrangement.
 Then output the complete HTML mockup in a ```html block."""
 
-CRITIQUE = """The first image is the original hand-drawn sketch. The second image is a screenshot of the current mockup rendered at {width}x{height}.
+# Step 1 of the loop: a short verdict, no HTML. Cheap (~100 output tokens).
+JUDGE = """The first image is the original hand-drawn sketch. The second image is a screenshot of the current mockup rendered at {width}x{height}.
 
 Designer's notes: {description}
+{checks}
+Compare the render to the sketch:
+- Are the same elements present, in the same positions and relative sizes?
+- Is anything overflowing, overlapping, clipped, or off-screen?
+- Is the text legible and the spacing consistent? Does it look like a finished product screen?
 
-Compare the render to the sketch. Check:
-- Same elements present, in the same positions and relative sizes.
-- Nothing overflowing, overlapping, clipped, or off-screen.
-- Text legible, spacing consistent, looks like a finished product screen.
+Do NOT output any HTML.
+If the render is a faithful, polished version of the sketch and the automated checks found nothing, reply with exactly the single word APPROVED.
+Otherwise reply with a bullet list of the concrete problems (at most 5, one line each, specific: which element, what is wrong, what it should be). Only list problems that matter; cosmetic taste is not a problem."""
 
-If the render is a faithful, polished version of the sketch, reply with exactly the single word APPROVED and nothing else.
+# Step 2, only when the judge found problems: revise the previous HTML.
+REVISE = """Here is the current mockup HTML:
 
-Otherwise, list the concrete problems in 2-5 bullets, then output the COMPLETE corrected HTML document in a ```html block. Fix the layout issues; do not redesign what already matches."""
+```html
+{html}
+```
+
+A review found these problems:
+{problems}
+
+Fix exactly these problems. Keep everything else as it is. Output the COMPLETE corrected HTML document in one ```html block and nothing else."""
+
+CHECKS_HEADER = "\nAutomated layout checks found these problems (measured in the browser, they are facts, include all of them):\n"
+CHECKS_CLEAN = "\nAutomated layout checks passed: nothing overflows the viewport, no tiny text, no external resources.\n"
 
 REPAIR = """Your previous reply did not contain a complete HTML document.
 Output the complete mockup now as ONE ```html fenced block containing <!doctype html> through </html>. No commentary."""

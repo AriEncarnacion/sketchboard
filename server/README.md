@@ -28,13 +28,17 @@ Response is `application/x-ndjson`: one JSON object per line, as they happen.
 |--------|--------|---------|
 | `status` | `message` | progress text, show it to the user |
 | `draft` | `iteration`, `html`, `notes`, `tokens`, `seconds` | a new full HTML document. Render it immediately. |
-| `render` | `iteration`, `png_base64` | screenshot of that draft. Only with `debug: true`. |
-| `approved` | `iteration` | Gemma judged the render faithful to the sketch |
-| `final` | `html`, `iterations`, `approved` | done. `html` is the one to keep. |
+| `checks` | `iteration`, `clean`, `problems`, `png_base64` (debug only) | deterministic layout checks on that draft |
+| `verdict` | `iteration`, `problems`, `score`, `seconds` | Gemma listed problems with that draft |
+| `approved` | `iteration`, `seconds` | Gemma judged the render faithful to the sketch |
+| `final` | `html`, `chosen`, `score`, `approved`, `iterations` | done. `html` is the one to keep; `chosen` says which draft it is. |
 | `error` | `message` | something broke. Stream ends. |
 
-The app should render each `draft` as it arrives so the user watches it refine, and keep
-the `final` one.
+The app should render each `draft` as it arrives so the user watches it refine, then
+swap in `final.html` (which may be an earlier draft if a revision made things worse).
+
+Optional request fields: `model` (e.g. `"gemma4:31b"`) overrides the default per call.
+See `DESIGN.md` for why the loop looks like this and what the models measured.
 
 `GET /healthz` process alive. `GET /readyz` returns 503 until Ollama has the model.
 

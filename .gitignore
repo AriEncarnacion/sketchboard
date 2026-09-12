@@ -12,3 +12,4 @@ server/.venv/
 __pycache__/
 .pytest_cache/
 lambda/.last-mockup.html
+lambda/.last-render-*.png

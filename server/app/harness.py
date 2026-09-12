@@ -4,9 +4,11 @@
 
   {"type": "status",  "message": "..."}
   {"type": "draft",   "iteration": n, "html": "...", "notes": "...", "tokens": ..., "seconds": ...}
-  {"type": "render",  "iteration": n, "png_base64": "..."}            (only when debug=True)
-  {"type": "approved","iteration": n}
-  {"type": "final",   "html": "...", "iterations": n, "approved": bool}
+  {"type": "checks",  "iteration": n, "clean": bool, "problems": "- ...", "png_base64": "..." (debug only)}
+  {"type": "verdict", "iteration": n, "problems": "- ...", "seconds": ...}   judge found problems
+  {"type": "approved","iteration": n, "seconds": ...}                         judge approved
+  {"type": "final",   "html": "...", "iterations": n, "approved": bool, "chosen": i, "score": s}
+                                                     `chosen` is the draft iteration returned as html
   {"type": "error",   "message": "..."}
 """
 
@@ -23,16 +25,16 @@ def _system() -> dict[str, Any]:
     return {"role": "system", "content": prompts.SYSTEM.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H)}
 
 
-async def _ask_for_html(gemma: Gemma, messages: list[dict[str, Any]]) -> tuple[Reply, str | None]:
+async def _ask_for_html(gemma: Gemma, messages: list[dict[str, Any]], model: str | None) -> tuple[Reply, str | None]:
     """Chat once; if the reply has no HTML, ask once more for just the document."""
-    reply = await gemma.chat(messages)
+    reply = await gemma.chat(messages, model=model)
     html = extract_html(reply.text)
     if html is None and not is_approved(reply.text):
         messages = messages + [
             {"role": "assistant", "content": reply.text},
             {"role": "user", "content": prompts.REPAIR},
         ]
-        reply = await gemma.chat(messages, temperature=0.2)
+        reply = await gemma.chat(messages, model=model, temperature=0.2)
         html = extract_html(reply.text)
     return reply, html
 
@@ -51,6 +53,7 @@ async def run(
     description: str,
     *,
     max_iterations: int | None = None,
+    model: str | None = None,
     debug: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     iters = config.MAX_ITERATIONS if max_iterations is None else max(0, max_iterations)
@@ -58,12 +61,12 @@ async def run(
     sketch_img = image_part(sketch, mime)
 
     # --- draft ------------------------------------------------------------------
-    yield {"type": "status", "message": "drafting"}
+    yield {"type": "status", "message": f"drafting with {model or gemma.model}"}
     messages = [
         _system(),
         {"role": "user", "content": [text_part(prompts.DRAFT.format(description=description)), sketch_img]},
     ]
-    reply, html = await _ask_for_html(gemma, messages)
+    reply, html = await _ask_for_html(gemma, messages, model)
     if html is None:
         yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
         return
@@ -72,43 +75,72 @@ async def run(
         "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
     }
 
-    approved = False
-    n = 0
     if not render.available():
         if iters > 0:
             yield {"type": "status", "message": "renderer unavailable, skipping critique"}
-        yield {"type": "final", "html": html, "iterations": 0, "approved": False}
+        yield {"type": "final", "html": html, "iterations": 0, "approved": False, "chosen": 0}
         return
 
-    # --- critique / revise --------------------------------------------------------
-    for n in range(1, iters + 1):
-        yield {"type": "status", "message": f"rendering draft {n - 1}"}
+    # --- judge / revise -------------------------------------------------------------
+    # Every draft is rendered, checked, and judged, including the last one. `iters` is the
+    # number of revisions allowed. We keep the best-scoring draft, not the latest: an
+    # unnecessary rewrite can make things worse.
+    scored: list[tuple[int, int, str]] = []   # (score, iteration, html); lower is better
+    approved_at: int | None = None
+    n = 0
+    for n in range(iters + 1):
+        yield {"type": "status", "message": f"rendering draft {n}"}
         try:
-            png = await render.screenshot(html)
+            png, report = await render.render(html)
         except Exception as e:  # noqa: BLE001 - keep serving even if Chromium hiccups
             yield {"type": "status", "message": f"render failed ({e.__class__.__name__}), stopping"}
+            scored.append((50, n, html))
             break
-        if debug:
-            yield {"type": "render", "iteration": n - 1, "png_base64": base64.b64encode(png).decode()}
+        checks_text = report.summary(config.VIEWPORT_W, config.VIEWPORT_H)
+        yield {"type": "checks", "iteration": n, "clean": report.clean, "problems": checks_text,
+               **({"png_base64": base64.b64encode(png).decode()} if debug else {})}
 
-        yield {"type": "status", "message": f"critiquing draft {n - 1}"}
-        critique = prompts.CRITIQUE.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H, description=description)
-        messages = [
-            _system(),
-            {"role": "user", "content": [text_part(critique), sketch_img, image_part(png, "image/png")]},
-        ]
-        reply, new_html = await _ask_for_html(gemma, messages)
-        if is_approved(reply.text):
-            approved = True
-            yield {"type": "approved", "iteration": n - 1}
+        # Judge: short verdict, no HTML. Cheap, and stops the model from rewriting a good page.
+        yield {"type": "status", "message": f"judging draft {n}"}
+        checks = (prompts.CHECKS_HEADER + checks_text + "\n") if checks_text else prompts.CHECKS_CLEAN
+        judge = prompts.JUDGE.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H,
+                                     description=description, checks=checks)
+        verdict = await gemma.chat(
+            [_system(), {"role": "user", "content": [text_part(judge), sketch_img, image_part(png, "image/png")]}],
+            model=model, max_tokens=400, temperature=0.1,
+        )
+        if is_approved(verdict.text):
+            approved_at = n
+            scored.append((0, n, html))
+            yield {"type": "approved", "iteration": n, "seconds": round(verdict.seconds, 1)}
             break
+        problems = verdict.text.strip()
+        if extract_html(problems):
+            problems = _notes(problems, extract_html(problems)) or "see automated checks"
+        n_problems = sum(1 for line in problems.splitlines() if line.strip().startswith(("-", "*", "•")))
+        # Deterministic failures weigh more than the model's opinions.
+        score = n_problems + 3 * len(checks_text.splitlines())
+        scored.append((score, n, html))
+        yield {"type": "verdict", "iteration": n, "problems": problems, "score": score,
+               "seconds": round(verdict.seconds, 1)}
+        if n == iters:
+            break
+
+        # Revise: fix exactly the listed problems.
+        yield {"type": "status", "message": f"revising draft {n}"}
+        revise = prompts.REVISE.format(html=html, problems=problems)
+        messages = [_system(), {"role": "user", "content": [text_part(revise), sketch_img]}]
+        reply, new_html = await _ask_for_html(gemma, messages, model)
         if new_html is None:
-            yield {"type": "status", "message": "critique returned no HTML, keeping previous draft"}
+            yield {"type": "status", "message": "revision returned no HTML, keeping previous draft"}
             break
         html = new_html
         yield {
-            "type": "draft", "iteration": n, "html": html, "notes": _notes(reply.text, html),
+            "type": "draft", "iteration": n + 1, "html": html, "notes": _notes(reply.text, html),
             "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
         }
 
-    yield {"type": "final", "html": html, "iterations": n if not approved else n - 1, "approved": approved}
+    # Best score wins; on a tie prefer the later draft (it had the fix applied).
+    best_score, best_n, best_html = min(scored, key=lambda s: (s[0], -s[1]))
+    yield {"type": "final", "html": best_html, "iterations": n, "approved": approved_at is not None,
+           "chosen": best_n, "score": best_score}

@@ -37,6 +37,7 @@ class MockupRequest(BaseModel):
     mime: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|png|webp)$")
     description: str = Field(default="", max_length=4000, description="Dictated notes from the user")
     max_iterations: int | None = Field(default=None, ge=0, le=5)
+    model: str | None = Field(default=None, pattern=r"^[\w.:-]+$", description="Override the Ollama model tag")
     debug: bool = Field(default=False, description="Also stream render screenshots")
 
 
@@ -69,7 +70,7 @@ async def mockup(req: MockupRequest) -> StreamingResponse:
         try:
             async for ev in harness.run(
                 app.state.gemma, sketch, req.mime, req.description,
-                max_iterations=req.max_iterations, debug=req.debug,
+                max_iterations=req.max_iterations, model=req.model, debug=req.debug,
             ):
                 yield json.dumps(ev) + "\n"
         except Exception as e:  # noqa: BLE001 - surface to the client instead of a dropped stream
