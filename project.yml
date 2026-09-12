@@ -27,3 +27,6 @@ targets:
     settings:
       TARGETED_DEVICE_FAMILY: "2"
       CODE_SIGN_STYLE: Automatic
+      # Personal Teams can't share one App ID. Each dev sets BUNDLE_ID_SUFFIX (e.g. ".ari")
+      # in the git-ignored Secrets.xcconfig; empty for the shared/CI id.
+      PRODUCT_BUNDLE_IDENTIFIER: com.silverlionapps.Sketchboard$(BUNDLE_ID_SUFFIX)
