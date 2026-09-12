@@ -13,6 +13,7 @@
 Runs behind nginx on the Lambda box; nginx does the bearer-token check.
 """
 
+import asyncio
 import base64
 import binascii
 import json
@@ -37,6 +38,8 @@ API_VERSION = 1
 async def lifespan(app: FastAPI):
     app.state.gemma = Gemma()
     app.state.nango = Nango()
+    # Start Chromium in the background so the first mockup doesn't pay its launch cost.
+    app.state.warm_task = asyncio.create_task(render.warm())
     yield
     await app.state.gemma.aclose()
     await app.state.nango.aclose()

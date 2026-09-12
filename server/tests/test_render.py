@@ -82,3 +82,13 @@ async def _boxes(html, selectors):
         return {s: await page.eval_on_selector(s, "e => { const r = e.getBoundingClientRect(); return {x: r.x, y: r.y, width: r.width, height: r.height}; }") for s in selectors}
     finally:
         await page.close()
+
+
+def test_warm_starts_browser_and_renders(loop):
+    assert loop.run_until_complete(render.warm()) is True
+    assert render._browser is not None and render._browser.is_connected()
+
+
+def test_warm_is_noop_when_unavailable(loop, monkeypatch):
+    monkeypatch.setattr(render, "available", lambda: False)
+    assert loop.run_until_complete(render.warm()) is False
