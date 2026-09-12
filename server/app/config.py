@@ -24,6 +24,14 @@ MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "6000"))
 REASONING = os.environ.get("REASONING", "none")
 REQUEST_TIMEOUT_S = float(os.environ.get("REQUEST_TIMEOUT_S", "600"))
 
+# Sessions persist as JSON files here so they survive restarts. Empty = memory only.
+SESSIONS_DIR = os.environ.get("SESSIONS_DIR", "./sessions")
+
+# Public viewer links (/m/{id}?t=sig) for sharing a mockup, e.g. from the Slack bot.
+# PUBLIC_BASE_URL is what a browser can reach, e.g. http://1.2.3.4:8080. Empty = no links.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+VIEWER_SECRET = os.environ.get("VIEWER_SECRET", "dev-only-not-secret")
+
 # Nango (nango.dev) brokers "Sign in with GitHub". Empty key = auth endpoints return 503.
 NANGO_SECRET_KEY = os.environ.get("NANGO_SECRET_KEY", "")
 NANGO_INTEGRATION_ID = os.environ.get("NANGO_INTEGRATION_ID", "github")
