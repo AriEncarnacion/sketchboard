@@ -23,6 +23,8 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown]
         NSLocalNetworkUsageDescription: Talks to the Gemma server on your local network.
+        NSMicrophoneUsageDescription: Dictate notes about the screen you sketched.
+        NSSpeechRecognitionUsageDescription: Turns dictated notes into text for the mockup prompt.
         NSAppTransportSecurity: {NSAllowsArbitraryLoads: true}  # ponytail: hackathon only, plain HTTP to the Gemma box
     settings:
       TARGETED_DEVICE_FAMILY: "2"

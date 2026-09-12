@@ -29,6 +29,10 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Talks to the Gemma server on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate notes about the screen you sketched.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turns dictated notes into text for the mockup prompt.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations~ipad</key>

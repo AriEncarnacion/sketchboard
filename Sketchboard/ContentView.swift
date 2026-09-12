@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var drawing = PKDrawing()
     @State private var canvasSize = CGSize(width: 1180, height: 820)
     @State private var showSettings = false
+    @State private var dictation = Dictation()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -14,6 +15,8 @@ struct ContentView: View {
                 HStack(spacing: 12) {
                     TextField("Describe the screen (optional)", text: $model.description)
                         .textFieldStyle(.roundedBorder)
+                    DictationButton(dictation: dictation, field: "describe",
+                                    text: $model.description, isEnabled: !model.isBusy)
                     Button { drawing = PKDrawing() } label: { Label("Clear", systemImage: "trash") }
                         .disabled(drawing.strokes.isEmpty || model.isBusy)
                     if model.isBusy {
@@ -54,6 +57,8 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { model.edit() }
                         .disabled(!model.canEdit)
+                    DictationButton(dictation: dictation, field: "edit",
+                                    text: $model.editText, isEnabled: model.canEdit)
                     Button("Apply") { model.edit() }
                         .buttonStyle(.bordered)
                         .disabled(!model.canEdit || model.editText.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -78,7 +83,7 @@ struct ContentView: View {
                     Text(problems).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
                 }
-                if let err = model.errorMessage {
+                if let err = model.errorMessage ?? dictation.errorMessage {
                     Text(err).font(.caption).foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
                 }
