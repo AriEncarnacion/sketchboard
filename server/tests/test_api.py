@@ -12,6 +12,7 @@ from app.gemma import Reply
 DOC = "<!doctype html><html><body><h1>Login</h1><button>Go</button></body></html>"
 DOC2 = DOC.replace("Go", "Blue Go")
 IMG = base64.b64encode(b"\xff\xd8\xff\xe0 fake jpeg").decode()
+UID = "ipad-0f8e2b9c-4d1a-4e6b-9c3d-7a5f1e2d3c4b"
 
 
 class FakeGemma:
@@ -30,14 +31,33 @@ class FakeGemma:
         return Reply(text=f"notes\n```html\n{self.reply_html}\n```", prompt_tokens=10, completion_tokens=20, seconds=0.1)
 
 
+class FakeNango:
+    """Stands in for nango.dev. `connected` flips once the fake user has authorized."""
+
+    configured = True
+    connected = False
+
+    async def aclose(self): ...
+    async def create_session(self, user_id):
+        return {"connect_link": f"https://connect.nango.dev/?token=fake-{user_id}", "expires_at": "2026-01-01T00:00:00Z"}
+    async def find_connection(self, user_id):
+        return "conn-1" if self.connected else None
+    async def github_user(self, connection_id):
+        return {"login": "octocat", "avatar_url": "https://avatars.example/1", "name": "The Octocat"}
+
+
 @pytest.fixture
 def client(monkeypatch):
     fake = FakeGemma()
     fake.calls = []
+    nango = FakeNango()
+    nango.connected = False
     monkeypatch.setattr(main, "Gemma", lambda: fake)
+    monkeypatch.setattr(main, "Nango", lambda: nango)
     monkeypatch.setattr(harness.render, "available", lambda: False)  # no Chromium in route tests
     with TestClient(main.app) as c:
         c.fake = fake  # type: ignore[attr-defined]
+        c.nango = nango  # type: ignore[attr-defined]
         yield c
 
 
@@ -86,3 +106,21 @@ def test_bad_input(client):
 
 def test_legacy_alias(client):
     assert events(client.post("/api/mockup", json={"image_base64": IMG}))[-1]["type"] == "final"
+
+
+def test_auth_session(client):
+    r = client.post("/api/v1/auth/github/session", json={"user_id": UID})
+    assert r.status_code == 200, r.text
+    assert r.json()["connect_link"].startswith("https://connect.nango.dev/")
+    assert client.post("/api/v1/auth/github/session", json={"user_id": "bad id!"}).status_code == 422
+    assert client.post("/api/v1/auth/github/session", json={"user_id": "ipad-short"}).status_code == 422
+    assert client.get("/api/v1/auth/github/me", params={"user_id": "ipad-short"}).status_code == 422
+    client.nango.configured = False
+    assert client.post("/api/v1/auth/github/session", json={"user_id": UID}).status_code == 503
+
+
+def test_auth_me(client):
+    assert client.get("/api/v1/auth/github/me", params={"user_id": UID}).json() == {"connected": False}
+    client.nango.connected = True
+    body = client.get("/api/v1/auth/github/me", params={"user_id": UID}).json()
+    assert body["connected"] is True and body["login"] == "octocat" and body["avatar_url"]
