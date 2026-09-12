@@ -288,7 +288,7 @@ cmd_deploy() {
   echo "syncing server/ -> ubuntu@$ip:sketchboard-server/"
   rsync -az --delete --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude '*.pyc' \
     -e "ssh ${sshopts[*]}" "$src" "ubuntu@$ip:sketchboard-server/"
-  ssh "${sshopts[@]}" "ubuntu@$ip" "GEMMA_TOKEN='$GEMMA_TOKEN' OLLAMA_MODEL='$OLLAMA_MODEL' NANGO_SECRET_KEY='${NANGO_SECRET_KEY:-}' bash ~/sketchboard-server/install.sh"
+  ssh "${sshopts[@]}" "ubuntu@$ip" "GEMMA_TOKEN='$GEMMA_TOKEN' OLLAMA_MODEL='$OLLAMA_MODEL' NANGO_SECRET_KEY='${NANGO_SECRET_KEY:-}' NANGO_INTEGRATION_ID='${NANGO_INTEGRATION_ID:-github}' bash ~/sketchboard-server/install.sh"
   echo; echo "public check:"; cmd_health
 }
 
