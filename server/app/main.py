@@ -55,6 +55,7 @@ class MockupRequest(BaseModel):
     session_id: str | None = _SESSION_ID
     max_iterations: int | None = Field(default=None, ge=0, le=5)
     model: str | None = Field(default=None, pattern=r"^[\w.:-]+$", description="Override the Ollama model tag")
+    stream: bool = Field(default=True, description="Emit draft_partial events while the model writes")
     debug: bool = Field(default=False, description="Also stream render screenshots")
 
 
@@ -66,6 +67,8 @@ class EditRequest(BaseModel):
     session_id: str = Field(pattern=r"^[A-Za-z0-9._-]{1,64}$")
     instruction: str = Field(min_length=1, max_length=2000, description="e.g. 'make the button blue'")
     model: str | None = Field(default=None, pattern=r"^[\w.:-]+$")
+    stream: bool = True
+    patch: bool = True     # try a search/replace patch first; False = always rewrite the page
     debug: bool = False
 
 
@@ -122,7 +125,7 @@ async def mockup(req: MockupRequest) -> StreamingResponse:
     sid = req.session_id or uuid.uuid4().hex[:16]
     sessions.start(sid, sketch, req.mime, req.description)
     events = harness.run(app.state.gemma, sketch, req.mime, req.description,
-                         max_iterations=req.max_iterations, model=req.model, debug=req.debug)
+                         max_iterations=req.max_iterations, model=req.model, stream=req.stream, debug=req.debug)
     return _ndjson(_prepend({"type": "session", "session_id": sid}, events), sid)
 
 
@@ -133,7 +136,8 @@ async def edit(req: EditRequest) -> StreamingResponse:
         raise HTTPException(404, "unknown session or no mockup yet; call /api/v1/mockup first")
     s.history.append(req.instruction.strip())
     events = harness.edit(app.state.gemma, s.sketch, s.mime, s.description, s.html, req.instruction,
-                          s.history[:-1], model=req.model, debug=req.debug)
+                          s.history[:-1], model=req.model, stream=req.stream, patch_first=req.patch,
+                          debug=req.debug)
     return _ndjson(_prepend({"type": "session", "session_id": s.id}, events), s.id)
 
 

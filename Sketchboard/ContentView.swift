@@ -1,91 +1,44 @@
 import SwiftUI
 import PencilKit
 
+/// Side by side, or one pane at a time filling the screen.
+enum PaneLayout {
+    case split, full
+}
+
 struct ContentView: View {
     @State private var model = MockupViewModel()
     @State private var drawing = PKDrawing()
     @State private var canvasSize = CGSize(width: 1180, height: 820)
     @State private var showSettings = false
+    @State private var dictation = Dictation()
+    @State private var layout: PaneLayout = .split
+    @State private var visiblePane = 0
 
     var body: some View {
-        HStack(spacing: 0) {
-            // Left: sketch
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    TextField("Describe the screen (optional)", text: $model.description)
-                        .textFieldStyle(.roundedBorder)
-                    Button { drawing = PKDrawing() } label: { Label("Clear", systemImage: "trash") }
-                        .disabled(drawing.strokes.isEmpty || model.isBusy)
-                    if model.isBusy {
-                        Button("Cancel", role: .cancel) { model.cancel() }
-                    } else {
-                        Button { model.generate(drawing: drawing, canvasSize: canvasSize) } label: {
-                            Label("Generate", systemImage: "sparkles")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(drawing.strokes.isEmpty || !model.isConfigured)
-                    }
-                }
-                .padding(10)
-                GeometryReader { geo in
-                    Canvas(drawing: $drawing)
-                        .onAppear { canvasSize = geo.size }
-                        .onChange(of: geo.size) { _, new in canvasSize = new }
-                }
-                .background(Color.white)
-            }
-            .frame(maxWidth: .infinity)
-
+        VStack(spacing: 0) {
+            topBar
+            if model.isBusy { progressBar }
             Divider()
-
-            // Right: mockup
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    statusDot
-                    Text(model.status).lineLimit(1).truncationMode(.tail)
-                    Spacer()
-                    githubButton
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+            if layout == .split {
+                HStack(spacing: 0) {
+                    sketchPane
+                    Divider()
+                    mockupPane
                 }
-                .padding(10)
-                // Edit row lives at the top so the keyboard (or its accessory bar) can never cover it.
-                HStack(spacing: 12) {
-                    TextField("Change something… e.g. make the button green", text: $model.editText)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { model.edit() }
-                        .disabled(!model.canEdit)
-                    Button("Apply") { model.edit() }
-                        .buttonStyle(.bordered)
-                        .disabled(!model.canEdit || model.editText.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .padding(.horizontal, 10).padding(.bottom, 8)
-                ZStack {
-                    if let html = model.html {
-                        MockupWebView(html: html)
-                    } else {
-                        ContentUnavailableView(
-                            model.isConfigured ? "No mockup yet" : "Backend not configured",
-                            systemImage: model.isConfigured ? "rectangle.dashed" : "network.slash",
-                            description: Text(model.isConfigured ? "Sketch a screen on the left and tap Generate." : "Tap the gear and enter the server URL and token.")
-                        )
-                    }
-                    if model.isBusy {
-                        ProgressView().controlSize(.large).padding(20)
-                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    }
-                }
-                if let problems = model.lastProblems, !problems.isEmpty {
-                    Text(problems).font(.caption).foregroundStyle(.secondary).lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
-                }
-                if let err = model.errorMessage {
-                    Text(err).font(.caption).foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
-                }
+            } else if visiblePane == 0 {
+                sketchPane
+            } else {
+                mockupPane
             }
-            .frame(maxWidth: .infinity)
         }
         .onAppear { model.checkBackend() }
+        .onChange(of: model.isBusy) { _, busy in
+            // Full screen hides whichever pane you aren't on, so surface the result when
+            // the run ends. Nothing to show after a cancel with no mockup yet.
+            guard !busy, layout == .full, model.html != nil || model.errorMessage != nil else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { visiblePane = 1 }
+        }
         .sheet(isPresented: $showSettings, onDismiss: { model.checkBackend() }) { BackendSettingsView() }
         .sheet(isPresented: Binding(get: { model.authURL != nil }, set: { if !$0 { model.cancelSignIn() } })) {
             if let url = model.authURL { SafariView(url: url).ignoresSafeArea() }
@@ -106,6 +59,130 @@ struct ContentView: View {
                 .buttonStyle(.bordered)
                 .disabled(!model.isConfigured)
         }
+    }
+
+    /// Sits under the top bar so progress is visible in either layout, including while the
+    /// sketch pane is the one on screen.
+    private var progressBar: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ProgressView().progressViewStyle(.linear)
+            Text(model.status)
+                .font(.caption).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 6)
+    }
+
+    /// Layout switch, plus a pane picker when one pane fills the screen. Deliberately a
+    /// picker rather than a swipe: PKCanvasView and WKWebView are both scroll views, so a
+    /// horizontal drag over their content is swallowed before any pager could see it.
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    layout = layout == .split ? .full : .split
+                }
+            } label: {
+                Label(layout == .split ? "Split" : "Full",
+                      systemImage: layout == .split ? "rectangle.split.2x1" : "rectangle")
+            }
+            .buttonStyle(.bordered)
+
+            if layout == .full {
+                Picker("Pane", selection: $visiblePane) {
+                    Text("Sketch").tag(0)
+                    Text("Mockup").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+
+    // Left when split, whole screen when full: sketch
+    private var sketchPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                TextField("Describe the screen (optional)", text: $model.description)
+                    .textFieldStyle(.roundedBorder)
+                DictationButton(dictation: dictation, field: "describe",
+                                text: $model.description, isEnabled: !model.isBusy)
+                Button { drawing = PKDrawing() } label: { Label("Clear", systemImage: "trash") }
+                    .disabled(drawing.strokes.isEmpty || model.isBusy)
+                if model.isBusy {
+                    Button("Cancel", role: .cancel) { model.cancel() }
+                } else {
+                    Button { model.generate(drawing: drawing, canvasSize: canvasSize) } label: {
+                        Label("Generate", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(drawing.strokes.isEmpty || !model.isConfigured)
+                }
+            }
+            .padding(10)
+            GeometryReader { geo in
+                Canvas(drawing: $drawing)
+                    .onAppear { canvasSize = geo.size }
+                    .onChange(of: geo.size) { _, new in canvasSize = new }
+            }
+            .background(Color.white)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // Right when split, whole screen when full: mockup
+    private var mockupPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                statusDot
+                Text(model.status).lineLimit(1).truncationMode(.tail)
+                Spacer()
+                githubButton
+                Button { showSettings = true } label: { Image(systemName: "gearshape") }
+            }
+            .padding(10)
+            // Edit row lives at the top so the keyboard (or its accessory bar) can never cover it.
+            HStack(spacing: 12) {
+                TextField("Change something… e.g. make the button green", text: $model.editText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { model.edit() }
+                    .disabled(!model.canEdit)
+                DictationButton(dictation: dictation, field: "edit",
+                                text: $model.editText, isEnabled: model.canEdit)
+                Button("Apply") { model.edit() }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canEdit || model.editText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 10).padding(.bottom, 8)
+            ZStack {
+                if let html = model.html {
+                    MockupWebView(html: html)
+                } else {
+                    ContentUnavailableView(
+                        model.isConfigured ? "No mockup yet" : "Backend not configured",
+                        systemImage: model.isConfigured ? "rectangle.dashed" : "network.slash",
+                        description: Text(model.isConfigured ? "Sketch a screen and tap Generate." : "Tap the gear and enter the server URL and token.")
+                    )
+                }
+                if model.isBusy {
+                    ProgressView().controlSize(.large).padding(20)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+            if let problems = model.lastProblems, !problems.isEmpty {
+                Text(problems).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
+            }
+            if let err = model.errorMessage ?? dictation.errorMessage {
+                Text(err).font(.caption).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var statusDot: some View {
