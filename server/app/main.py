@@ -58,6 +58,7 @@ class EditRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=2000, description="e.g. 'make the button blue'")
     model: str | None = Field(default=None, pattern=r"^[\w.:-]+$")
     stream: bool = True
+    patch: bool = True     # try a search/replace patch first; False = always rewrite the page
     debug: bool = False
 
 
@@ -125,7 +126,8 @@ async def edit(req: EditRequest) -> StreamingResponse:
         raise HTTPException(404, "unknown session or no mockup yet; call /api/v1/mockup first")
     s.history.append(req.instruction.strip())
     events = harness.edit(app.state.gemma, s.sketch, s.mime, s.description, s.html, req.instruction,
-                          s.history[:-1], model=req.model, stream=req.stream, debug=req.debug)
+                          s.history[:-1], model=req.model, stream=req.stream, patch_first=req.patch,
+                          debug=req.debug)
     return _ndjson(_prepend({"type": "session", "session_id": s.id}, events), s.id)
 
 

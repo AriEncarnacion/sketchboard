@@ -20,6 +20,7 @@ class FakeGemma:
     model = "fake"
     calls: list[list[dict]] = []
     reply_html = DOC
+    reply_text: str | None = None   # when set, non-streaming chat() returns this verbatim
 
     async def aclose(self): ...
     async def alive(self): return True
@@ -27,6 +28,8 @@ class FakeGemma:
 
     async def chat(self, messages, **kw):
         self.calls.append(messages)
+        if self.reply_text is not None:
+            return Reply(text=self.reply_text, prompt_tokens=10, completion_tokens=5, seconds=0.05)
         return Reply(text=f"notes\n```html\n{self.reply_html}\n```", prompt_tokens=10, completion_tokens=20, seconds=0.1)
 
     def chat_stream(self, messages, **kw):
@@ -122,3 +125,43 @@ def test_stream_false_emits_no_partials(client):
     evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "stream": False}))
     assert not [e for e in evs if e["type"] == "draft_partial"]
     assert evs[-1]["html"] == DOC
+
+
+PATCH = "<<<<<<< SEARCH\n<button>Go</button>\n=======\n<button class=\"green\">Go</button>\n>>>>>>> REPLACE"
+PATCHED = DOC.replace("<button>Go</button>", '<button class="green">Go</button>')
+
+
+def test_edit_uses_patch_when_it_applies(client):
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "p1"}))
+    client.fake.reply_text = PATCH
+    evs = events(client.post("/api/v1/edit", json={"session_id": "p1", "instruction": "make the button green"}))
+    types = [e["type"] for e in evs]
+    assert "patch" in types and "draft_partial" not in types   # fast path, no rewrite
+    draft = next(e for e in evs if e["type"] == "draft")
+    assert draft["patched"] is True and draft["html"] == PATCHED
+    assert evs[-1]["html"] == PATCHED
+    assert client.get("/api/v1/session/p1").json()["html"] == PATCHED
+    # The patch prompt carried the current HTML and asked for SEARCH/REPLACE blocks.
+    prompt_text = client.fake.calls[-1][-1]["content"][0]["text"]
+    assert DOC in prompt_text and "<<<<<<< SEARCH" in prompt_text
+
+
+def test_edit_falls_back_to_rewrite_when_patch_misses(client):
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "p2"}))
+    client.fake.reply_text = PATCH.replace("<button>Go</button>", "<button>Nope</button>")  # search won't match
+    client.fake.reply_html = DOC2
+    evs = events(client.post("/api/v1/edit", json={"session_id": "p2", "instruction": "x"}))
+    msgs = [e.get("message", "") for e in evs if e["type"] == "status"]
+    assert any("did not apply" in m for m in msgs)
+    draft = next(e for e in evs if e["type"] == "draft")
+    assert draft["patched"] is False and draft["html"] == DOC2   # rewrite path (streamed)
+    assert evs[-1]["html"] == DOC2
+
+
+def test_edit_patch_false_always_rewrites(client):
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "p3"}))
+    client.fake.reply_text = PATCH
+    client.fake.reply_html = DOC2
+    evs = events(client.post("/api/v1/edit", json={"session_id": "p3", "instruction": "x", "patch": False}))
+    assert "patch" not in [e["type"] for e in evs]
+    assert evs[-1]["html"] == DOC2

@@ -342,6 +342,7 @@ print_events() {
         elif .type == "checks" then "[checks \(.iteration)] \(if .clean then "clean" else "problems:\n" + .problems end)"
         elif .type == "verdict" then "[verdict \(.iteration)] \(.seconds)s, problems:\n\(.problems | split("\n") | map("  " + .) | join("\n"))"
         elif .type == "approved" then "[approved \(.iteration)] \(.seconds)s"
+        elif .type == "patch" then "[patch] \(.hunks) hunk(s) in \(.seconds)s: \(.note)"
         else "[\(.type)] \(.message // .iteration // "")" end' <<< "$line"
       html="$(jq -r 'select(.type=="final") | .html' <<< "$line")"
       [[ -n "$html" ]] && printf '%s' "$html" > "$out" && echo "saved final HTML to $out (open it in a browser)"

@@ -64,7 +64,8 @@ must be ignored, so the server can add things without breaking older app builds.
 | `session` | `session_id` | always first. Remember it for `/edit`. |
 | `status` | `message` | show as progress text |
 | `draft_partial` | `iteration`, `html`, `chars` | the draft so far, a few times a second while the model writes. `html` is the whole partial document (not a delta), already cut at the last complete tag. Render it in place; expect it to grow. Off with `"stream": false`. |
-| `draft` | `iteration`, `html`, `notes`, `tokens`, `seconds` | render `html` now. Replace the previous draft (and any partial). |
+| `draft` | `iteration`, `html`, `notes`, `tokens`, `seconds`, `patched`? | render `html` now. Replace the previous draft (and any partial). `patched: true` (edits only) means it came from a patch, not a rewrite. |
+| `patch` | `hunks`, `seconds`, `note` | edits only: a search/replace patch was applied. The `draft` follows immediately. |
 | `checks` | `iteration`, `clean`, `problems`, `png_base64`? | optional: show `problems` while the judge runs |
 | `verdict` | `iteration`, `problems`, `score`, `seconds` | optional: show what the judge wants fixed |
 | `approved` | `iteration`, `seconds` | optional: a "looks good" affordance |

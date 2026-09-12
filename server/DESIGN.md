@@ -91,6 +91,26 @@ within about 60 s. Levers, in the order to pull them:
    Gemma emit body markup only. Cuts output tokens roughly in half and makes streaming
    look styled from the first element. Not done yet.
 
+## Follow-up edits
+
+An edit used to regenerate the whole page: ~6.5k tokens, 15-16 s. Now the model is asked
+for SEARCH/REPLACE blocks (`prompts.EDIT_PATCH`, applied by `patch.py`). Matching is
+exact, then whitespace-tolerant per line, then fuzzy (case-folded, ≥ 0.92 similar) for a
+retyped line. A patch is all-or-nothing; any miss falls back to the streamed full rewrite,
+so a half-applied edit never reaches the user. `"patch": false` forces the rewrite.
+
+Measured on the login mockup, `gemma4:26b`:
+
+| edit | hunks | wall time |
+|---|---|---|
+| make the Log in button green | 1 | 4.3 s |
+| add a Remember-me toggle above the button | 2 | 6.3 s |
+| rename the heading and square the social buttons | 3 | 5.6 s |
+
+Before fuzzy matching the third edit missed one hunk and fell back (13.8 s). Failure notes
+carry the first 90 chars of the unmatched search text so misses can be diagnosed from the
+event stream.
+
 ## Open questions for the team
 
 - **Follow-up edits.** "Make the button blue" needs the server to keep the last HTML per

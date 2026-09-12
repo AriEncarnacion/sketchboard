@@ -64,5 +64,32 @@ Apply exactly that change. Keep everything else as it is. Output the COMPLETE up
 
 EDIT_HISTORY = "\nEarlier edits already applied, in order:\n{items}\n"
 
+# Preferred edit path: a small search/replace patch instead of rewriting the page.
+# ~200 output tokens instead of ~3500, so an edit lands in a couple of seconds.
+EDIT_PATCH = """Here is the current mockup HTML:
+
+```html
+{html}
+```
+
+The original hand-drawn sketch is attached for reference. Designer's notes: {description}
+{history}
+The designer now asks: "{instruction}"
+
+Make exactly that change as a patch. Output one or more blocks in this exact format and nothing else:
+
+<<<<<<< SEARCH
+lines copied verbatim from the current HTML above (enough to be unique, usually 1-8 lines)
+=======
+the replacement for those lines
+>>>>>>> REPLACE
+
+Rules:
+- The SEARCH text must appear in the current HTML character for character, including indentation. Copy, don't retype.
+- Keep each block as small as possible. Use several blocks for changes in several places (for example a CSS rule and the element that uses it).
+- To insert, SEARCH for the neighbouring line and REPLACE with that line plus the new lines.
+- New styles go in the existing <style> block via their own SEARCH/REPLACE.
+- No explanations, no full document. Only if the request truly needs most of the page rewritten, output the complete document in a single ```html block instead."""
+
 REPAIR = """Your previous reply did not contain a complete HTML document.
 Output the complete mockup now as ONE ```html fenced block containing <!doctype html> through </html>. No commentary."""
