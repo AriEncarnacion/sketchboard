@@ -83,10 +83,13 @@ For a demo, the first draft should appear in under 30 s and the loop should fini
 within about 60 s. Levers, in the order to pull them:
 
 1. `MAX_ITERATIONS=1`. One judge pass catches the gross errors; the second rarely helps.
-2. Base stylesheet. Inject a fixed CSS reset + component classes from the server and let
-   Gemma emit body markup only. Cuts output tokens roughly in half. Not done yet.
-3. Stream tokens from the draft call so the page visibly builds. Needs the app to handle
-   partial HTML. Not done yet.
+2. **Streaming. Done.** The draft call streams; `draft_partial` events carry the document
+   so far, cut at the last complete tag, at most 4/s and only when it grew. On the login
+   sketch the first partial lands ~1 s into a 14 s draft. Caveat: partials stall while the
+   model writes the `<style>` block (nothing in CSS closes a tag), then jump. Which is why:
+3. Base stylesheet. Inject a fixed CSS reset + component classes from the server and let
+   Gemma emit body markup only. Cuts output tokens roughly in half and makes streaming
+   look styled from the first element. Not done yet.
 
 ## Open questions for the team
 

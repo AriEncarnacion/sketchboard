@@ -3,6 +3,8 @@
 `run()` is an async generator of event dicts so the API can stream progress:
 
   {"type": "status",  "message": "..."}
+  {"type": "draft_partial", "iteration": n, "html": "...", "chars": c}   the draft so far,
+                                                     a few times a second while the model writes
   {"type": "draft",   "iteration": n, "html": "...", "notes": "...", "tokens": ..., "seconds": ...}
   {"type": "checks",  "iteration": n, "clean": bool, "problems": "- ...", "png_base64": "..." (debug only)}
   {"type": "verdict", "iteration": n, "problems": "- ...", "seconds": ...}   judge found problems
@@ -13,30 +15,59 @@
 """
 
 import base64
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from . import config, prompts, render
 from .gemma import Gemma, Reply, image_part, text_part
-from .html import extract_html, is_approved
+from .html import extract_html, is_approved, partial_html
+
+# Streaming partials: at most this often, and only when the document grew by this much.
+PARTIAL_MIN_INTERVAL_S = 0.25
+PARTIAL_MIN_GROWTH = 48
 
 
 def _system() -> dict[str, Any]:
     return {"role": "system", "content": prompts.SYSTEM.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H)}
 
 
-async def _ask_for_html(gemma: Gemma, messages: list[dict[str, Any]], model: str | None) -> tuple[Reply, str | None]:
-    """Chat once; if the reply has no HTML, ask once more for just the document."""
-    reply = await gemma.chat(messages, model=model)
+async def _ask_for_html(
+    gemma: Gemma,
+    messages: list[dict[str, Any]],
+    model: str | None,
+    *,
+    iteration: int,
+    stream: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    """Ask for an HTML document. Yields `draft_partial` events while the model writes,
+    then exactly one {"type": "_result", "reply": Reply, "html": str | None} which the
+    caller consumes and must not forward. If the reply has no HTML, asks once more for
+    just the document (not streamed; it's the rare path)."""
+    if stream and hasattr(gemma, "chat_stream"):
+        reply, deltas = gemma.chat_stream(messages, model=model)
+        last_emit, last_len = 0.0, 0
+        async for _ in deltas:
+            now = time.monotonic()
+            if now - last_emit < PARTIAL_MIN_INTERVAL_S:
+                continue
+            part = partial_html(reply.text)
+            if part is None or len(part) - last_len < PARTIAL_MIN_GROWTH:
+                continue
+            last_emit, last_len = now, len(part)
+            yield {"type": "draft_partial", "iteration": iteration, "html": part, "chars": len(part)}
+    else:
+        reply = await gemma.chat(messages, model=model)
+
     html = extract_html(reply.text)
     if html is None and not is_approved(reply.text):
-        messages = messages + [
+        retry = messages + [
             {"role": "assistant", "content": reply.text},
             {"role": "user", "content": prompts.REPAIR},
         ]
-        reply = await gemma.chat(messages, model=model, temperature=0.2)
+        reply = await gemma.chat(retry, model=model, temperature=0.2)
         html = extract_html(reply.text)
-    return reply, html
+    yield {"type": "_result", "reply": reply, "html": html}
 
 
 def _looks_like_problems(text: str) -> bool:
@@ -51,6 +82,13 @@ def _notes(text: str, html: str | None) -> str:
     return text.strip()[:2000]
 
 
+def _draft_event(iteration: int, reply: Reply, html: str) -> dict[str, Any]:
+    return {
+        "type": "draft", "iteration": iteration, "html": html, "notes": _notes(reply.text, html),
+        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
+    }
+
+
 async def run(
     gemma: Gemma,
     sketch: bytes,
@@ -59,6 +97,7 @@ async def run(
     *,
     max_iterations: int | None = None,
     model: str | None = None,
+    stream: bool = True,
     debug: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     iters = config.MAX_ITERATIONS if max_iterations is None else max(0, max_iterations)
@@ -71,14 +110,17 @@ async def run(
         _system(),
         {"role": "user", "content": [text_part(prompts.DRAFT.format(description=description)), sketch_img]},
     ]
-    reply, html = await _ask_for_html(gemma, messages, model)
+    reply: Reply
+    html: str | None = None
+    async for ev in _ask_for_html(gemma, messages, model, iteration=0, stream=stream):
+        if ev["type"] == "_result":   # always the last event; let the generator finish
+            reply, html = ev["reply"], ev["html"]
+        else:
+            yield ev
     if html is None:
         yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
         return
-    yield {
-        "type": "draft", "iteration": 0, "html": html, "notes": _notes(reply.text, html),
-        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
-    }
+    yield _draft_event(0, reply, html)
 
     if not render.available():
         if iters > 0:
@@ -146,15 +188,17 @@ async def run(
         yield {"type": "status", "message": f"revising draft {n}"}
         revise = prompts.REVISE.format(html=html, problems=problems)
         messages = [_system(), {"role": "user", "content": [text_part(revise), sketch_img]}]
-        reply, new_html = await _ask_for_html(gemma, messages, model)
+        new_html: str | None = None
+        async for ev in _ask_for_html(gemma, messages, model, iteration=n + 1, stream=stream):
+            if ev["type"] == "_result":
+                reply, new_html = ev["reply"], ev["html"]
+            else:
+                yield ev
         if new_html is None:
             yield {"type": "status", "message": "revision returned no HTML, keeping previous draft"}
             break
         html = new_html
-        yield {
-            "type": "draft", "iteration": n + 1, "html": html, "notes": _notes(reply.text, html),
-            "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
-        }
+        yield _draft_event(n + 1, reply, html)
 
     # Best score wins; on a tie prefer the later draft (it had the fix applied).
     best_score, best_n, best_html = min(scored, key=lambda s: (s[0], -s[1]))
@@ -172,6 +216,7 @@ async def edit(
     history: list[str],
     *,
     model: str | None = None,
+    stream: bool = True,
     debug: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     """Apply one follow-up instruction to an existing mockup. Single revise call plus a
@@ -182,14 +227,17 @@ async def edit(
 
     yield {"type": "status", "message": f"editing with {model or gemma.model}"}
     messages = [_system(), {"role": "user", "content": [text_part(prompt), image_part(sketch, mime)]}]
-    reply, new_html = await _ask_for_html(gemma, messages, model)
+    reply: Reply
+    new_html: str | None = None
+    async for ev in _ask_for_html(gemma, messages, model, iteration=0, stream=stream):
+        if ev["type"] == "_result":
+            reply, new_html = ev["reply"], ev["html"]
+        else:
+            yield ev
     if new_html is None:
         yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
         return
-    yield {
-        "type": "draft", "iteration": 0, "html": new_html, "notes": _notes(reply.text, new_html),
-        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
-    }
+    yield _draft_event(0, reply, new_html)
 
     score = 0
     if render.available():

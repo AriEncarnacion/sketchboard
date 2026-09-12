@@ -1,7 +1,9 @@
 """Thin client for Gemma via Ollama's OpenAI-compatible endpoint."""
 
 import base64
+import json
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -85,3 +87,53 @@ class Gemma:
             seconds=time.monotonic() - t0,
             raw=data,
         )
+
+    def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        max_tokens: int = config.MAX_TOKENS,
+        temperature: float = 0.4,
+        reasoning: str = config.REASONING,
+    ) -> tuple[Reply, AsyncIterator[str]]:
+        """Streaming variant. Returns a Reply that fills in as tokens arrive, and an
+        iterator of text deltas. When the iterator is exhausted the Reply is complete
+        (text, usage, seconds)."""
+        reply = Reply(text="")
+        body = {
+            "model": model or self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "reasoning_effort": reasoning,
+        }
+
+        async def deltas() -> AsyncIterator[str]:
+            t0 = time.monotonic()
+            async with self._http.stream("POST", f"{self.base_url}/v1/chat/completions", json=body) as r:
+                r.raise_for_status()
+                async for line in r.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except ValueError:
+                        continue
+                    usage = chunk.get("usage")
+                    if usage:
+                        reply.prompt_tokens = usage.get("prompt_tokens", reply.prompt_tokens)
+                        reply.completion_tokens = usage.get("completion_tokens", reply.completion_tokens)
+                    for choice in chunk.get("choices") or []:
+                        delta = (choice.get("delta") or {}).get("content")
+                        if delta:
+                            reply.text += delta
+                            yield delta
+            reply.seconds = time.monotonic() - t0
+
+        return reply, deltas()

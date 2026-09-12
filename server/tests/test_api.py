@@ -29,6 +29,21 @@ class FakeGemma:
         self.calls.append(messages)
         return Reply(text=f"notes\n```html\n{self.reply_html}\n```", prompt_tokens=10, completion_tokens=20, seconds=0.1)
 
+    def chat_stream(self, messages, **kw):
+        """Feeds the canned reply out in small pieces, like the real endpoint."""
+        self.calls.append(messages)
+        reply = Reply(text="")
+        full = f"notes\n```html\n{self.reply_html}\n```"
+
+        async def deltas():
+            for i in range(0, len(full), 7):
+                piece = full[i:i + 7]
+                reply.text += piece
+                yield piece
+            reply.prompt_tokens, reply.completion_tokens, reply.seconds = 10, 20, 0.1
+
+        return reply, deltas()
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -86,3 +101,24 @@ def test_bad_input(client):
 
 def test_legacy_alias(client):
     assert events(client.post("/api/mockup", json={"image_base64": IMG}))[-1]["type"] == "final"
+
+
+def test_draft_partials_stream_before_draft(client, monkeypatch):
+    monkeypatch.setattr(harness, "PARTIAL_MIN_INTERVAL_S", 0.0)
+    monkeypatch.setattr(harness, "PARTIAL_MIN_GROWTH", 1)
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG}))
+    types = [e["type"] for e in evs]
+    partials = [e for e in evs if e["type"] == "draft_partial"]
+    assert partials, types
+    assert types.index("draft_partial") < types.index("draft")
+    # Partials grow, each ends on a complete tag, and the last is a prefix of the full draft.
+    lens = [p["chars"] for p in partials]
+    assert lens == sorted(lens) and all(p["html"].endswith(">") for p in partials)
+    assert DOC.startswith(partials[-1]["html"])
+    assert evs[-1]["html"] == DOC
+
+
+def test_stream_false_emits_no_partials(client):
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "stream": False}))
+    assert not [e for e in evs if e["type"] == "draft_partial"]
+    assert evs[-1]["html"] == DOC

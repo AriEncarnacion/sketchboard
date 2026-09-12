@@ -327,6 +327,14 @@ print_events() {
   local out="$HERE/.last-mockup.html"
   while IFS= read -r line; do
       if ! jq -e .type <<< "$line" >/dev/null 2>&1; then echo "[raw] $line"; continue; fi
+      if [[ "$line" == *'"draft_partial"'* ]]; then
+        # One updating line while the model writes; the partial doc lands in a file to open in a browser.
+        printf '\r[partial %s] %s chars, %s' "$(jq -r .iteration <<< "$line")" "$(jq -r .chars <<< "$line")" "$(date +%T)"
+        jq -r .html <<< "$line" > "$HERE/.last-mockup-partial.html"
+        partial_line=1
+        continue
+      fi
+      [[ -n "${partial_line:-}" ]] && { echo; partial_line=; }
       jq -r '
         if .type == "session" then "[session] \(.session_id)"
         elif .type == "draft" then "[draft \(.iteration)] \(.seconds)s, \(.tokens) tokens, \(.html | length) chars\n  \(.notes | split("\n") | map("  " + .) | join("\n"))"
