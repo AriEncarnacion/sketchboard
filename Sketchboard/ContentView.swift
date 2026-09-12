@@ -44,6 +44,7 @@ struct ContentView: View {
                     statusDot
                     Text(model.status).lineLimit(1).truncationMode(.tail)
                     Spacer()
+                    githubButton
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
                 .padding(10)
@@ -86,6 +87,25 @@ struct ContentView: View {
         }
         .onAppear { model.checkBackend() }
         .sheet(isPresented: $showSettings, onDismiss: { model.checkBackend() }) { BackendSettingsView() }
+        .sheet(isPresented: Binding(get: { model.authURL != nil }, set: { if !$0 { model.cancelSignIn() } })) {
+            if let url = model.authURL { SafariView(url: url).ignoresSafeArea() }
+        }
+    }
+
+    @ViewBuilder
+    private var githubButton: some View {
+        if let user = model.githubUser {
+            HStack(spacing: 6) {
+                AsyncImage(url: user.avatarURL) { $0.resizable() } placeholder: { Color.secondary.opacity(0.3) }
+                    .frame(width: 24, height: 24).clipShape(Circle())
+                Text("@\(user.login)").font(.callout)
+            }
+            .contextMenu { Button("Sign out", role: .destructive) { model.signOut() } }
+        } else {
+            Button { model.signInWithGitHub() } label: { Label("Sign in with GitHub", systemImage: "person.crop.circle") }
+                .buttonStyle(.bordered)
+                .disabled(!model.isConfigured)
+        }
     }
 
     private var statusDot: some View {

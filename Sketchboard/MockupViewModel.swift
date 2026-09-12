@@ -16,7 +16,21 @@ final class MockupViewModel {
     var lastProblems: String?
     var errorMessage: String?
 
+    // Sign in with GitHub (via Nango). authURL non-nil = Safari sheet is up.
+    var githubUser: GitHubUser?
+    var authURL: URL?
+    let userId: String = {
+        let key = "SKETCHBOARD_USER_ID"
+        if let id = UserDefaults.standard.string(forKey: key), id.count >= 20 { return id }  // re-mint short ids from early builds
+        // Full UUID (128 bits): the id doubles as the lookup key for this device's GitHub
+        // profile on the server, so it must not be guessable by another token holder.
+        let id = "ipad-" + UUID().uuidString.lowercased()
+        UserDefaults.standard.set(id, forKey: key)
+        return id
+    }()
+
     private var task: Task<Void, Never>?
+    private var authTask: Task<Void, Never>?
 
     var isConfigured: Bool { BackendConfig.current != nil }
     var canEdit: Bool { sessionId != nil && html != nil && !isBusy }
@@ -24,6 +38,50 @@ final class MockupViewModel {
     func checkBackend() {
         guard let config = BackendConfig.current else { backendOnline = false; return }
         Task { backendOnline = await MockupClient(config: config).isReady() }
+        refreshGitHubUser()
+    }
+
+    // MARK: GitHub sign-in
+
+    func signInWithGitHub() {
+        guard let config = BackendConfig.current else { errorMessage = MockupClientError.notConfigured.localizedDescription; return }
+        let client = MockupClient(config: config)
+        authTask?.cancel()
+        authTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                authURL = try await client.authSession(userId: userId)
+                // Poll while the sheet is up; Nango has no way to call back into a native app.
+                for _ in 0..<150 {   // ponytail: 150 × 2 s = 5 min, then give up quietly
+                    try await Task.sleep(for: .seconds(2))
+                    guard authURL != nil else { return }
+                    if let user = try? await client.authStatus(userId: userId) {
+                        githubUser = user
+                        authURL = nil
+                        return
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                errorMessage = error.localizedDescription
+                authURL = nil
+            }
+        }
+    }
+
+    /// Restores a previous sign-in without opening the sheet.
+    func refreshGitHubUser() {
+        guard let config = BackendConfig.current else { return }
+        Task { githubUser = try? await MockupClient(config: config).authStatus(userId: userId) }
+    }
+
+    func signOut() {
+        githubUser = nil   // ponytail: forgets locally; the Nango connection stays. Delete it via Nango if needed.
+    }
+
+    func cancelSignIn() {
+        authTask?.cancel()
+        authURL = nil
     }
 
     func generate(drawing: PKDrawing, canvasSize: CGSize) {

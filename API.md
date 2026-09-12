@@ -53,6 +53,27 @@ Apply a follow-up instruction to the session's current mockup.
 `{ "session_id", "description", "html", "history": ["edit 1", "edit 2"] }`. For reconnects
 and debugging.
 
+## Auth: `POST /api/v1/auth/github/session` and `GET /api/v1/auth/github/me`
+
+"Sign in with GitHub", brokered by Nango. The app never talks to Nango or GitHub directly.
+
+```json
+{ "user_id": "ipad-8F3A2C1B" }
+```
+
+| field | required | notes |
+|-------|----------|-------|
+| `user_id` | yes | Stable per-device id the app mints once (random UUID) and keeps in UserDefaults. `[A-Za-z0-9._-]{20,64}`. It is the only key to this device's profile, so it must be unguessable; anyone with the bearer token and the id can read the public GitHub profile. |
+
+Response `{ "connect_link": "https://connect.nango.dev/…", "expires_at": "…" }`. Open `connect_link`
+in an in-app browser; it hosts Nango's Connect UI, which runs the GitHub OAuth dance. Valid 30 min.
+
+`GET /api/v1/auth/github/me?user_id=ipad-8F3A2C1B` → `{ "connected": false }` until the user
+finishes, then `{ "connected": true, "login", "avatar_url", "name" }`. The app polls this every
+2 s while the browser sheet is open, and once on launch to restore a previous sign-in.
+
+`503` when the server has no `NANGO_SECRET_KEY`; `502` when Nango or GitHub errors.
+
 ## Event stream
 
 Every line has a `type`. Unknown types must be ignored, and unknown fields on known types

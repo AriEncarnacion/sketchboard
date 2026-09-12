@@ -5,6 +5,8 @@
   POST /api/v1/mockup       sketch + notes -> NDJSON event stream (see harness.py)
   POST /api/v1/edit         follow-up instruction on a session's last mockup -> same stream
   GET  /api/v1/session/{id} last html for a session (reconnect / debugging)
+  POST /api/v1/auth/github/session  {user_id} -> Nango Connect UI link for "Sign in with GitHub"
+  GET  /api/v1/auth/github/me?user_id=  {connected, login, avatar_url, name}
 
 Runs behind nginx on the Lambda box; nginx does the bearer-token check.
 """
@@ -17,12 +19,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException
+import httpx
+from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import config, harness, render, sessions
 from .gemma import Gemma
+from .nango import Nango
 
 API_VERSION = 1
 
@@ -30,8 +34,10 @@ API_VERSION = 1
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.gemma = Gemma()
+    app.state.nango = Nango()
     yield
     await app.state.gemma.aclose()
+    await app.state.nango.aclose()
     await render.shutdown()
 
 
@@ -50,6 +56,10 @@ class MockupRequest(BaseModel):
     max_iterations: int | None = Field(default=None, ge=0, le=5)
     model: str | None = Field(default=None, pattern=r"^[\w.:-]+$", description="Override the Ollama model tag")
     debug: bool = Field(default=False, description="Also stream render screenshots")
+
+
+class AuthSessionRequest(BaseModel):
+    user_id: str = Field(pattern=r"^[A-Za-z0-9._-]{20,64}$", description="Random per-device id minted by the app (>= 20 chars so it is not guessable)")
 
 
 class EditRequest(BaseModel):
@@ -133,6 +143,31 @@ async def session(session_id: str) -> dict[str, Any]:
     if s is None:
         raise HTTPException(404, "unknown session")
     return {"session_id": s.id, "description": s.description, "html": s.html, "history": s.history}
+
+
+@v1.post("/auth/github/session")
+async def auth_github_session(req: AuthSessionRequest) -> dict[str, Any]:
+    n: Nango = app.state.nango
+    if not n.configured:
+        raise HTTPException(503, "NANGO_SECRET_KEY not set on the server")
+    try:
+        return await n.create_session(req.user_id)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Nango: {e}")
+
+
+@v1.get("/auth/github/me")
+async def auth_github_me(user_id: str = Query(pattern=r"^[A-Za-z0-9._-]{20,64}$")) -> dict[str, Any]:
+    n: Nango = app.state.nango
+    if not n.configured:
+        raise HTTPException(503, "NANGO_SECRET_KEY not set on the server")
+    try:
+        cid = await n.find_connection(user_id)
+        if cid is None:
+            return {"connected": False}
+        return {"connected": True, **await n.github_user(cid)}
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Nango: {e}")
 
 
 app.include_router(v1)
