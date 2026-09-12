@@ -169,8 +169,20 @@ async def post_result(thread: discord.Thread, sid: str, status: discord.Message,
 
 @client.event
 async def on_ready():
+    # Global sync can take up to an hour to show up; a per-guild sync is immediate.
+    for guild in client.guilds:
+        tree.copy_global_to(guild=guild)
+        await tree.sync(guild=guild)
     await tree.sync()
-    log.info("logged in as %s, harness %s, require_mention=%s", client.user, HARNESS, REQUIRE_MENTION)
+    log.info("logged in as %s, harness %s, require_mention=%s, servers=%s",
+             client.user, HARNESS, REQUIRE_MENTION, [g.name for g in client.guilds] or "none yet")
+
+
+@client.event
+async def on_guild_join(guild: discord.Guild):
+    tree.copy_global_to(guild=guild)
+    await tree.sync(guild=guild)
+    log.info("added to server %s; /sketch synced", guild.name)
 
 
 @client.event
