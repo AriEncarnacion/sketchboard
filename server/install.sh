@@ -2,7 +2,7 @@
 # Runs ON the Lambda box (as ubuntu, with sudo). Idempotent.
 # Invoked by lambda/lambdactl.sh deploy, which first rsyncs server/ to ~/sketchboard-server.
 #
-# Env: GEMMA_TOKEN (required), OLLAMA_MODEL (default gemma4:26b)
+# Env: GEMMA_TOKEN (required), OLLAMA_MODEL (default gemma4:26b), NANGO_SECRET_KEY (optional)
 
 set -euo pipefail
 : "${GEMMA_TOKEN:?GEMMA_TOKEN is required}"
@@ -37,6 +37,7 @@ OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=$OLLAMA_MODEL
 MAX_ITERATIONS=2
 RENDER_ENABLED=1
+NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-}
 EOF
 
 echo "== systemd"

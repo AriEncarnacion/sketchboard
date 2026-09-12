@@ -59,6 +59,24 @@ final class MockupClient: Sendable {
         }
     }
 
+    struct AuthSessionRequest: Encodable {
+        var userId: String
+        enum CodingKeys: String, CodingKey { case userId = "user_id" }
+    }
+
+    private struct AuthSessionResponse: Decodable {
+        var connectLink: URL
+        enum CodingKeys: String, CodingKey { case connectLink = "connect_link" }
+    }
+
+    private struct AuthMeResponse: Decodable {
+        var connected: Bool
+        var login: String?
+        var avatarUrl: URL?
+        var name: String?
+        enum CodingKeys: String, CodingKey { case connected, login, name; case avatarUrl = "avatar_url" }
+    }
+
     // MARK: Calls
 
     func mockup(sketch: Data, mime: String = "image/jpeg", description: String,
@@ -72,12 +90,49 @@ final class MockupClient: Sendable {
         stream(path: "api/v1/edit", body: EditRequest(sessionId: sessionId, instruction: instruction))
     }
 
+    /// Nango Connect UI link for this device's user. Open it in SafariView, then poll `authStatus`.
+    func authSession(userId: String) async throws -> URL {
+        let r: AuthSessionResponse = try await json("POST", path: "api/v1/auth/github/session",
+                                                    body: AuthSessionRequest(userId: userId))
+        return r.connectLink
+    }
+
+    /// The signed-in GitHub user, or nil if this device hasn't connected yet.
+    func authStatus(userId: String) async throws -> GitHubUser? {
+        let r: AuthMeResponse = try await json("GET", path: "api/v1/auth/github/me", query: ["user_id": userId])
+        guard r.connected, let login = r.login else { return nil }
+        return GitHubUser(login: login, avatarURL: r.avatarUrl, name: r.name)
+    }
+
     /// True when the box is up and the model is loaded.
     func isReady() async -> Bool {
         var req = URLRequest(url: config.baseURL.appending(path: "readyz"))
         req.timeoutInterval = 5
         guard let (_, resp) = try? await session.data(for: req) else { return false }
         return (resp as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    // MARK: Plain JSON
+
+    private func json<T: Decodable>(_ method: String, path: String, query: [String: String] = [:],
+                                    body: (any Encodable)? = nil) async throws -> T {
+        var url = config.baseURL.appending(path: path)
+        if !query.isEmpty { url.append(queryItems: query.map { URLQueryItem(name: $0.key, value: $0.value) }) }
+        var req = URLRequest(url: url)
+        req.httpMethod = method
+        req.timeoutInterval = 20
+        req.setValue("Bearer \(config.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONEncoder().encode(body)
+        }
+        let (data, response) = try await session.data(for: req)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            throw MockupClientError.http(status: status, body: String(decoding: data, as: UTF8.self))
+        }
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     // MARK: Streaming
@@ -117,4 +172,10 @@ final class MockupClient: Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+}
+
+struct GitHubUser: Equatable {
+    var login: String
+    var avatarURL: URL?
+    var name: String?
 }

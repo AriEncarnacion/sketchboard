@@ -23,3 +23,7 @@ MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "6000"))
 # count against MAX_TOKENS, so anything but "none" needs a much bigger budget.
 REASONING = os.environ.get("REASONING", "none")
 REQUEST_TIMEOUT_S = float(os.environ.get("REQUEST_TIMEOUT_S", "600"))
+
+# Nango (nango.dev) brokers "Sign in with GitHub". Empty key = auth endpoints return 503.
+NANGO_SECRET_KEY = os.environ.get("NANGO_SECRET_KEY", "")
+NANGO_INTEGRATION_ID = os.environ.get("NANGO_INTEGRATION_ID", "github")
