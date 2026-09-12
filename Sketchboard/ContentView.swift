@@ -144,6 +144,15 @@ struct Canvas: UIViewRepresentable {
         view.tool = PKInkingTool(.pen, color: .black, width: 4)
         view.delegate = context.coordinator
         view.drawing = drawing
+
+        // System tool picker (pen sizes, eraser, undo). Deferred: the view isn't in the
+        // window yet, so becomeFirstResponder() would no-op if called synchronously.
+        let picker = context.coordinator.toolPicker
+        DispatchQueue.main.async {
+            picker.setVisible(true, forFirstResponder: view)
+            picker.addObserver(view)
+            view.becomeFirstResponder()
+        }
         return view
     }
 
@@ -158,6 +167,7 @@ struct Canvas: UIViewRepresentable {
 
     class Coordinator: NSObject, PKCanvasViewDelegate {
         let parent: Canvas
+        let toolPicker = PKToolPicker()   // owned here so it outlives SwiftUI's struct re-creation
         var isUpdatingFromView = false
         init(_ parent: Canvas) { self.parent = parent }
 
