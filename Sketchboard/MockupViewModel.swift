@@ -94,7 +94,7 @@ final class MockupViewModel {
         sessionId = sid
         html = nil
         lastProblems = nil
-        run(client.mockup(sketch: jpeg, description: description, sessionId: sid), verb: "Generating")
+        run(client.mockup(sketch: jpeg, description: description, sessionId: sid), verb: "Thinking")
     }
 
     func edit() {
@@ -143,9 +143,10 @@ final class MockupViewModel {
             status = "Draft \(e.iteration ?? 0) in \(Int(e.seconds ?? 0)) s"
         case .checks:
             lastProblems = (e.clean ?? true) ? nil : e.problems
+            status = "Validating…"
         case .verdict:
             lastProblems = e.problems
-            status = "Judge found problems, revising…"
+            status = "Revising…"
         case .approved:
             lastProblems = nil
             status = "Approved."
