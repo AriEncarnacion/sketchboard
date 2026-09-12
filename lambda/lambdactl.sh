@@ -16,6 +16,7 @@
 #   lambda/lambdactl.sh sketch <img> send an image + prompt straight to Gemma (no harness)
 #   lambda/lambdactl.sh deploy       rsync server/ to the box and (re)install the harness
 #   lambda/lambdactl.sh mockup <img> [notes]  full harness round trip, streams events
+#   lambda/lambdactl.sh edit "<instruction>"  follow-up edit on the last mockup's session
 #   lambda/lambdactl.sh terminate    terminate the instance (asks for confirmation)
 #
 # Config lives in lambda/.env (see lambda/.env.example). Needs curl + jq.
@@ -41,7 +42,7 @@ LAMBDA_SSH_KEY_NAME="${LAMBDA_SSH_KEY_NAME:-sketchboard}"
 LAMBDA_SSH_KEY_FILE="${LAMBDA_SSH_KEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 LAMBDA_SSH_KEY_FILE="${LAMBDA_SSH_KEY_FILE/#\~/$HOME}"
 LAMBDA_SSH_KEY_FILE="$(eval echo "$LAMBDA_SSH_KEY_FILE")"
-OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:31b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:26b}"
 LAMBDA_INSTANCE_PREFS="${LAMBDA_INSTANCE_PREFS:-gpu_1x_h100_sxm5,gpu_1x_h100_pcie,gpu_1x_a100_sxm4,gpu_1x_a100,gpu_1x_a6000,gpu_1x_a10}"
 LAMBDA_REGION="${LAMBDA_REGION:-}"
 # Regions to prefer when several have capacity, in order. Others are used only as a fallback.
@@ -297,19 +298,49 @@ cmd_mockup() {
   [[ -f "$img" ]] || die "usage: mockup <image file> [description]"
   local ip; ip="$(instance_ip)"; [[ -n "$ip" ]] || die "instance has no IP yet"
   local mime="image/jpeg"; [[ "$img" == *.png ]] && mime="image/png"
+  # Env overrides: MODEL=gemma4:26b ITER=1 DEBUG=1
   local desc="${*:-}" out="$HERE/.last-mockup.html"
-  jq -n --arg m "$mime" --arg d "$desc" --rawfile b64 <(base64 < "$img" | tr -d '\n') \
-    '{image_base64:$b64, mime:$m, description:$d}' \
-  | curl -sS -N -m 900 "http://$ip:$PORT/api/mockup" \
+  jq -n --arg m "$mime" --arg d "$desc" --arg model "${MODEL:-}" --arg iter "${ITER:-}" --arg dbg "${DEBUG:-}" \
+    --rawfile b64 <(base64 < "$img" | tr -d '\n') \
+    '{image_base64:$b64, mime:$m, description:$d}
+     + (if $model != "" then {model:$model} else {} end)
+     + (if $iter != "" then {max_iterations:($iter|tonumber)} else {} end)
+     + (if $dbg != "" then {debug:true} else {} end)' \
+  | curl -sS -N -m 900 "http://$ip:$PORT/api/v1/mockup" \
       -H "Authorization: Bearer $GEMMA_TOKEN" -H "Content-Type: application/json" --data-binary @- \
-  | while IFS= read -r line; do
+  | print_events
+}
+
+# edit "<instruction>" [session_id]  -- follow-up on the last mockup (session saved by `mockup`)
+cmd_edit() {
+  local instruction="${1:-}"; [[ -n "$instruction" ]] || die "usage: edit \"make the button green\" [session_id]"
+  local sid="${2:-$(cat "$HERE/.last-session" 2>/dev/null || true)}"
+  [[ -n "$sid" ]] || die "no session: run 'mockup' first or pass a session id"
+  local ip; ip="$(instance_ip)"; [[ -n "$ip" ]] || die "instance has no IP yet"
+  jq -n --arg s "$sid" --arg i "$instruction" '{session_id:$s, instruction:$i}' \
+  | curl -sS -N -m 900 "http://$ip:$PORT/api/v1/edit" \
+      -H "Authorization: Bearer $GEMMA_TOKEN" -H "Content-Type: application/json" --data-binary @- \
+  | print_events
+}
+
+print_events() {
+  local out="$HERE/.last-mockup.html"
+  while IFS= read -r line; do
+      if ! jq -e .type <<< "$line" >/dev/null 2>&1; then echo "[raw] $line"; continue; fi
       jq -r '
-        if .type == "draft" then "[draft \(.iteration)] \(.seconds)s, \(.tokens) tokens, \(.html | length) chars\n  \(.notes | split("\n") | map("  " + .) | join("\n"))"
-        elif .type == "final" then "[final] iterations=\(.iterations) approved=\(.approved)"
-        elif .type == "render" then "[render \(.iteration)] png"
+        if .type == "session" then "[session] \(.session_id)"
+        elif .type == "draft" then "[draft \(.iteration)] \(.seconds)s, \(.tokens) tokens, \(.html | length) chars\n  \(.notes | split("\n") | map("  " + .) | join("\n"))"
+        elif .type == "final" then "[final] chose draft \(.chosen) (score \(.score // "-")), approved=\(.approved), \(.iterations) judged"
+        elif .type == "checks" then "[checks \(.iteration)] \(if .clean then "clean" else "problems:\n" + .problems end)"
+        elif .type == "verdict" then "[verdict \(.iteration)] \(.seconds)s, problems:\n\(.problems | split("\n") | map("  " + .) | join("\n"))"
+        elif .type == "approved" then "[approved \(.iteration)] \(.seconds)s"
         else "[\(.type)] \(.message // .iteration // "")" end' <<< "$line"
       html="$(jq -r 'select(.type=="final") | .html' <<< "$line")"
       [[ -n "$html" ]] && printf '%s' "$html" > "$out" && echo "saved final HTML to $out (open it in a browser)"
+      sid="$(jq -r 'select(.type=="session") | .session_id' <<< "$line")"
+      [[ -n "$sid" ]] && printf '%s' "$sid" > "$HERE/.last-session"
+      png="$(jq -r 'select(.type=="checks") | .png_base64 // empty' <<< "$line")"
+      [[ -n "$png" ]] && base64 -d <<< "$png" > "$HERE/.last-render-$(jq -r .iteration <<< "$line").png"
     done
 }
 
@@ -340,6 +371,7 @@ case "$cmd" in
   sketch)    cmd_sketch "$@" ;;
   deploy)    cmd_deploy ;;
   mockup)    cmd_mockup "$@" ;;
+  edit)      cmd_edit "$@" ;;
   terminate) cmd_terminate ;;
   *) sed -n '2,20p' "$0"; exit 1 ;;
 esac

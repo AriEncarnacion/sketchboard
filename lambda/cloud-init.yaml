@@ -50,7 +50,8 @@ write_files:
               }
               proxy_pass http://127.0.0.1:11434;
               proxy_http_version 1.1;
-              proxy_set_header Host $host;
+              # Ollama 403s any Host header that isn't localhost (DNS-rebinding guard).
+              proxy_set_header Host 127.0.0.1:11434;
               proxy_read_timeout 600s;
               proxy_send_timeout 600s;
               proxy_buffering off;
@@ -62,10 +63,12 @@ write_files:
     content: |
       #!/usr/bin/env bash
       # Pull the model and load it into VRAM. Safe to re-run.
+      # Uses the HTTP API, not the ollama CLI: cloud-init runs without $HOME and the CLI panics.
       set -euo pipefail
       MODEL="__OLLAMA_MODEL__"
       until curl -fsS http://127.0.0.1:11434/api/version >/dev/null; do sleep 2; done
-      ollama pull "$MODEL"
+      curl -fsS http://127.0.0.1:11434/api/pull \
+        -d "{\"model\":\"$MODEL\",\"stream\":false}" | grep -q '"status":"success"'
       curl -fsS http://127.0.0.1:11434/api/generate \
         -d "{\"model\":\"$MODEL\",\"keep_alive\":-1}" >/dev/null
       mkdir -p /var/lib/sketchboard

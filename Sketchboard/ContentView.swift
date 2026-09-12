@@ -1,188 +1,180 @@
 import SwiftUI
 import PencilKit
-import WebKit
 
 struct ContentView: View {
-    @State private var strokeCount = 0
-    @State private var mockupHTML = ContentView.sampleHTML
+    @State private var model = MockupViewModel()
+    @State private var drawing = PKDrawing()
+    @State private var canvasSize = CGSize(width: 1180, height: 820)
+    @State private var showSettings = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left: sketch
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    TextField("Describe the screen (optional)", text: $model.description)
+                        .textFieldStyle(.roundedBorder)
+                    Button { drawing = PKDrawing() } label: { Label("Clear", systemImage: "trash") }
+                        .disabled(drawing.strokes.isEmpty || model.isBusy)
+                    if model.isBusy {
+                        Button("Cancel", role: .cancel) { model.cancel() }
+                    } else {
+                        Button { model.generate(drawing: drawing, canvasSize: canvasSize) } label: {
+                            Label("Generate", systemImage: "sparkles")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(drawing.strokes.isEmpty || !model.isConfigured)
+                    }
+                }
+                .padding(10)
+                GeometryReader { geo in
+                    Canvas(drawing: $drawing)
+                        .onAppear { canvasSize = geo.size }
+                        .onChange(of: geo.size) { _, new in canvasSize = new }
+                }
+                .background(Color.white)
+            }
+            .frame(maxWidth: .infinity)
+
+            Divider()
+
+            // Right: mockup
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    statusDot
+                    Text(model.status).lineLimit(1).truncationMode(.tail)
+                    Spacer()
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                }
+                .padding(10)
+                // Edit row lives at the top so the keyboard (or its accessory bar) can never cover it.
+                HStack(spacing: 12) {
+                    TextField("Change something… e.g. make the button green", text: $model.editText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { model.edit() }
+                        .disabled(!model.canEdit)
+                    Button("Apply") { model.edit() }
+                        .buttonStyle(.bordered)
+                        .disabled(!model.canEdit || model.editText.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .padding(.horizontal, 10).padding(.bottom, 8)
+                ZStack {
+                    if let html = model.html {
+                        MockupWebView(html: html)
+                    } else {
+                        ContentUnavailableView(
+                            model.isConfigured ? "No mockup yet" : "Backend not configured",
+                            systemImage: model.isConfigured ? "rectangle.dashed" : "network.slash",
+                            description: Text(model.isConfigured ? "Sketch a screen on the left and tap Generate." : "Tap the gear and enter the server URL and token.")
+                        )
+                    }
+                    if model.isBusy {
+                        ProgressView().controlSize(.large).padding(20)
+                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                if let problems = model.lastProblems, !problems.isEmpty {
+                    Text(problems).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
+                }
+                if let err = model.errorMessage {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 6)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .onAppear { model.checkBackend() }
+        .sheet(isPresented: $showSettings, onDismiss: { model.checkBackend() }) { BackendSettingsView() }
+    }
+
+    private var statusDot: some View {
+        Circle()
+            .fill(model.backendOnline == true ? .green : (model.backendOnline == false ? .red : .gray))
+            .frame(width: 10, height: 10)
+            .help(model.backendOnline == true ? "Backend online" : "Backend unreachable")
+    }
+}
+
+/// Lets a teammate point the app at the box without rebuilding. Values live in UserDefaults
+/// and override whatever Secrets.xcconfig baked in.
+struct BackendSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var url = UserDefaults.standard.string(forKey: BackendConfig.defaultsURLKey)
+        ?? (Bundle.main.infoDictionary?["GemmaBaseURL"] as? String ?? "")
+    @State private var token = UserDefaults.standard.string(forKey: BackendConfig.defaultsTokenKey)
+        ?? (Bundle.main.infoDictionary?["GemmaToken"] as? String ?? "")
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Text("Hello, Sketchboard — strokes: \(strokeCount)")
-                    .padding(8)
-                HStack(spacing: 0) {
-                    Canvas(strokeCount: $strokeCount)
-                        .frame(maxWidth: .infinity)
-                    HTMLPreview(html: mockupHTML)
-                        .frame(maxWidth: .infinity)
+            Form {
+                Section("Harness server") {
+                    TextField("http://1.2.3.4:8080", text: $url)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Bearer token", text: $token)
+                }
+                Section {
+                    Button("Use build-time values", role: .destructive) {
+                        BackendConfig.clearOverride(); dismiss()
+                    }
+                } footer: {
+                    Text("Get both from whoever ran `lambda/lambdactl.sh wait`. The IP changes every launch.")
                 }
             }
+            .navigationTitle("Backend")
             .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("Load sample") { mockupHTML = ContentView.sampleHTML }
-                    Button("Clear") { mockupHTML = "" }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { BackendConfig.saveOverride(urlString: url, token: token); dismiss() }
+                        .disabled(URL(string: url)?.host == nil || token.isEmpty)
                 }
             }
         }
-    }
-
-    /// Self-contained iOS-styled login mockup. Inline CSS/JS only, no external resources.
-    /// The button's inline script mutates its own label so we can confirm the rendered
-    /// HTML is actually interactive.
-    static let sampleHTML = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-      * { box-sizing: border-box; }
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
-        background: #f2f2f7;
-        margin: 0;
-        padding: 24px;
-        color: #1c1c1e;
-      }
-      .card {
-        background: #ffffff;
-        border-radius: 12px;
-        padding: 24px;
-        max-width: 360px;
-        margin: 40px auto;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      }
-      h1 {
-        font-size: 24px;
-        font-weight: 700;
-        text-align: center;
-        margin: 0 0 24px;
-      }
-      input {
-        width: 100%;
-        padding: 12px;
-        margin-bottom: 12px;
-        border: 1px solid #d1d1d6;
-        border-radius: 12px;
-        font-size: 16px;
-        background: #f2f2f7;
-      }
-      .toggle-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin: 16px 0;
-        font-size: 16px;
-      }
-      .switch { position: relative; width: 51px; height: 31px; }
-      .switch input { opacity: 0; width: 0; height: 0; margin: 0; }
-      .slider {
-        position: absolute;
-        inset: 0;
-        background: #d1d1d6;
-        border-radius: 31px;
-        transition: background 0.2s;
-      }
-      .slider::before {
-        content: "";
-        position: absolute;
-        height: 27px;
-        width: 27px;
-        left: 2px;
-        top: 2px;
-        background: #ffffff;
-        border-radius: 50%;
-        transition: transform 0.2s;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-      }
-      .switch input:checked + .slider { background: #34c759; }
-      .switch input:checked + .slider::before { transform: translateX(20px); }
-      button {
-        width: 100%;
-        padding: 14px;
-        border: none;
-        border-radius: 12px;
-        background: #007aff;
-        color: #ffffff;
-        font-size: 17px;
-        font-weight: 600;
-        cursor: pointer;
-      }
-      button:active { background: #0062cc; }
-    </style>
-    </head>
-    <body>
-      <div class="card">
-        <h1>Sign In</h1>
-        <input type="email" placeholder="Email">
-        <input type="password" placeholder="Password">
-        <div class="toggle-row">
-          <span>Remember me</span>
-          <label class="switch">
-            <input type="checkbox">
-            <span class="slider"></span>
-          </label>
-        </div>
-        <button id="signInButton" onclick="this.textContent = 'Tapped!'">Sign In</button>
-      </div>
-    </body>
-    </html>
-    """
-}
-
-/// Wraps a WKWebView so a hardcoded HTML string can be rendered natively. Reloads only
-/// when the html string actually changes, so ordinary SwiftUI redraws don't reset the page.
-struct HTMLPreview: UIViewRepresentable {
-    let html: String
-
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.scrollView.bounces = false
-        return webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.loadedHTML != html else { return }
-        context.coordinator.loadedHTML = html
-        webView.loadHTMLString(html, baseURL: nil)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    class Coordinator {
-        var loadedHTML: String?
+        .frame(minWidth: 480, minHeight: 320)
     }
 }
 
+// Wraps Apple's PencilKit canvas for SwiftUI.
 struct Canvas: UIViewRepresentable {
-    @Binding var strokeCount: Int
-    private let toolPicker = PKToolPicker()
+    @Binding var drawing: PKDrawing
 
     func makeUIView(context: Context) -> PKCanvasView {
         let view = PKCanvasView()
-        view.drawingPolicy = .anyInput
+        view.drawingPolicy = .anyInput // ponytail: lets mouse/finger draw in Simulator; .pencilOnly for the real demo
         view.tool = PKInkingTool(.pen, color: .black, width: 4)
         view.delegate = context.coordinator
+        view.drawing = drawing
 
-        // Deferred: view isn't in the window yet, so becomeFirstResponder() would no-op here.
+        // System tool picker (pen sizes, eraser, undo). Deferred: the view isn't in the
+        // window yet, so becomeFirstResponder() would no-op if called synchronously.
+        let picker = context.coordinator.toolPicker
         DispatchQueue.main.async {
-            toolPicker.setVisible(true, forFirstResponder: view)
-            toolPicker.addObserver(view)
+            picker.setVisible(true, forFirstResponder: view)
+            picker.addObserver(view)
             view.becomeFirstResponder()
         }
         return view
     }
 
-    func updateUIView(_ uiView: PKCanvasView, context: Context) {}
+    func updateUIView(_ uiView: PKCanvasView, context: Context) {
+        // Only push the binding into the view when it changed elsewhere (e.g. Clear).
+        if uiView.drawing != drawing && !context.coordinator.isUpdatingFromView {
+            uiView.drawing = drawing
+        }
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     class Coordinator: NSObject, PKCanvasViewDelegate {
         let parent: Canvas
+        let toolPicker = PKToolPicker()   // owned here so it outlives SwiftUI's struct re-creation
+        var isUpdatingFromView = false
         init(_ parent: Canvas) { self.parent = parent }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            parent.strokeCount = canvasView.drawing.strokes.count
+            isUpdatingFromView = true
+            parent.drawing = canvasView.drawing
+            isUpdatingFromView = false
         }
     }
 }

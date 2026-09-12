@@ -58,15 +58,20 @@ class Gemma:
         self,
         messages: list[dict[str, Any]],
         *,
+        model: str | None = None,
         max_tokens: int = config.MAX_TOKENS,
         temperature: float = 0.4,
+        reasoning: str = config.REASONING,
     ) -> Reply:
         body = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
             "stream": False,
+            # Gemma 4 thinks by default and will spend the whole token budget on it.
+            # Ollama's OpenAI endpoint ignores `think` but honours reasoning_effort.
+            "reasoning_effort": reasoning,
         }
         t0 = time.monotonic()
         r = await self._http.post(f"{self.base_url}/v1/chat/completions", json=body)

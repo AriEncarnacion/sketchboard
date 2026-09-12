@@ -2,11 +2,11 @@
 # Runs ON the Lambda box (as ubuntu, with sudo). Idempotent.
 # Invoked by lambda/lambdactl.sh deploy, which first rsyncs server/ to ~/sketchboard-server.
 #
-# Env: GEMMA_TOKEN (required), OLLAMA_MODEL (default gemma4:31b)
+# Env: GEMMA_TOKEN (required), OLLAMA_MODEL (default gemma4:26b)
 
 set -euo pipefail
 : "${GEMMA_TOKEN:?GEMMA_TOKEN is required}"
-OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:31b}"
+OLLAMA_MODEL="${OLLAMA_MODEL:-gemma4:26b}"
 SRC="$HOME/sketchboard-server"
 APP=/opt/sketchboard
 
@@ -70,7 +70,8 @@ server {
         if (\$http_authorization != "Bearer $GEMMA_TOKEN") { return 401; }
         proxy_pass http://127.0.0.1:11434;
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
+        # Ollama 403s any Host header that isn't localhost (DNS-rebinding guard).
+        proxy_set_header Host 127.0.0.1:11434;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
         proxy_buffering off;

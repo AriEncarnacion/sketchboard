@@ -4,7 +4,7 @@ and local dev can differ without code changes."""
 import os
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
-MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:31b")
+MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:26b")
 
 # Draft + up to this many critique/revise passes.
 MAX_ITERATIONS = int(os.environ.get("MAX_ITERATIONS", "2"))
@@ -18,4 +18,8 @@ VIEWPORT_W = int(os.environ.get("VIEWPORT_W", "1180"))
 VIEWPORT_H = int(os.environ.get("VIEWPORT_H", "820"))
 
 MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "6000"))
+
+# Gemma 4 reasoning: "none" (default, fast) or "low"/"medium"/"high". Thinking tokens
+# count against MAX_TOKENS, so anything but "none" needs a much bigger budget.
+REASONING = os.environ.get("REASONING", "none")
 REQUEST_TIMEOUT_S = float(os.environ.get("REQUEST_TIMEOUT_S", "600"))
