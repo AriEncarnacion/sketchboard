@@ -1,0 +1,20 @@
+name: Sketchboard
+options:
+  bundleIdPrefix: com.silverlionapps
+  deploymentTarget:
+    iOS: "18.0"
+targets:
+  Sketchboard:
+    type: application
+    platform: iOS
+    sources: [Sketchboard]
+    info:
+      path: Sketchboard/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown]
+        NSLocalNetworkUsageDescription: Talks to the Gemma server on your local network.
+        NSAppTransportSecurity: {NSAllowsArbitraryLoads: true}  # ponytail: hackathon only, plain HTTP to the Gemma box
+    settings:
+      TARGETED_DEVICE_FAMILY: "2"
+      CODE_SIGN_STYLE: Automatic
