@@ -87,9 +87,21 @@ within about 60 s. Levers, in the order to pull them:
    so far, cut at the last complete tag, at most 4/s and only when it grew. On the login
    sketch the first partial lands ~1 s into a 14 s draft. Caveat: partials stall while the
    model writes the `<style>` block (nothing in CSS closes a tag), then jump. Which is why:
-3. Base stylesheet. Inject a fixed CSS reset + component classes from the server and let
-   Gemma emit body markup only. Cuts output tokens roughly in half and makes streaming
-   look styled from the first element. Not done yet.
+3. **Base stylesheet. Done.** `basecss.py` owns ~14 KB of CSS: design tokens, iOS-style
+   components (bars, buttons, inputs, toggles, lists, cards, image placeholders), and 21
+   CSS-mask icons. The system prompt carries a one-screen class guide; Gemma emits a
+   `<div class="screen">` fragment plus at most a small page-specific `<style>`. The
+   server assembles the full document. Prompts that show the model a document collapse
+   the base block to a one-line comment (`strip`/`inject` round-trip), so edits and
+   revisions don't re-read it either.
+
+   Login sketch, `gemma4:26b`, before → after: draft 10-14 s → 4-5 s, draft tokens
+   ~2800 → ~2100, page CSS written by the model ~3k chars → ~300. Patch edit 4.3 s →
+   2.7 s. Style is now consistent run to run (same blue, radii, spacing, icons).
+
+   Two things bit us on the first runs and are fixed in CSS + tests: `.screen.split`
+   must force a row (the model writes both classes on one element), and every `.image-*`
+   variant must paint on its own (the model writes `image-hero` without `image`).
 
 ## Follow-up edits
 

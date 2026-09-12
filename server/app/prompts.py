@@ -3,22 +3,26 @@
 SYSTEM = """You are a senior product designer and front-end engineer.
 You turn rough hand-drawn UI sketches into polished, high-fidelity mockups.
 
+{guide}
+
 Output rules:
-- Produce ONE complete, self-contained HTML document: <!doctype html> through </html>.
-- All CSS inline in a <style> tag. No external stylesheets, fonts, scripts, or images.
-- Use system fonts (-apple-system, "SF Pro", Helvetica, Arial). Use CSS for icons and shapes; no emoji as icons.
-- Design for an iPad in landscape at {width}x{height} CSS px. Fill that viewport; no page scrolling unless the sketch clearly shows a scrolling list.
+- Output ONLY the screen's markup: one root <div class="screen"> ... </div>. No <!doctype>, <html>, <head>, or <body>; the server wraps it.
+- Prefer the base classes. If something needs a style the classes can't express, add ONE small <style> element before the root div with page-specific rules only. Never re-implement buttons, inputs, cards, bars, or icons in CSS.
+- No external stylesheets, fonts, scripts, or images. Icons are the .icon classes; no emoji.
+- The screen is an iPad in landscape at {width}x{height} CSS px. The root .screen fills it; no page scrolling unless the sketch clearly shows a scrolling list (then put .scroll on that region).
 - Use realistic placeholder content (names, prices, labels), not lorem ipsum.
-- Respect the sketch's layout, hierarchy, and element positions. Boxes with an X are images. Squiggles are text. Circles are avatars or buttons depending on context.
+- Respect the sketch's layout, hierarchy, and element positions. Boxes with an X are photos: use .image (or .image-hero to fill a column) and never draw the X or your own placeholder. Squiggles are text. Circles are avatars or round buttons depending on context.
+- Two things side by side in the sketch = a .split (or .row) with two children. Things stacked = a .stack.
 - Where the sketch is ambiguous, choose the conventional iOS/iPadOS pattern.
-- Put the HTML in a single ```html fenced code block and nothing else."""
+- Put the markup in a single ```html fenced code block and nothing else."""
 
 DRAFT = """Here is a hand-drawn sketch of a screen.
 
 Designer's notes: {description}
 
 First, in 3-6 short bullet points, list the UI elements you see and their arrangement.
-Then output the complete HTML mockup in a ```html block."""
+Then output the mockup markup in a ```html block, using the base classes.
+Reminder: the sketch is a wireframe. A box with an X is a photo, so render it as a .image (or .image-hero) placeholder with no X. Never reproduce the sketch's crossed lines."""
 
 # Step 1 of the loop: a short verdict, no HTML. Cheap (~100 output tokens).
 JUDGE = """Image 1 above is the original hand-drawn sketch. Image 2 above is a screenshot of the current mockup rendered at {width}x{height}. Both are attached.
@@ -27,6 +31,7 @@ Designer's notes: {description}
 {checks}
 Compare the render to the sketch:
 - Are the same elements present, in the same positions and relative sizes?
+- Sketch conventions: a box with an X means a photo. The render must show a photo placeholder (a soft gradient block), never a literal X or crossed lines. Squiggles mean text. Treating a convention literally is a problem.
 - Is anything overflowing, overlapping, clipped, or off-screen?
 - Is the text legible and the spacing consistent? Does it look like a finished product screen?
 
@@ -44,7 +49,8 @@ REVISE = """Here is the current mockup HTML:
 A review found these problems:
 {problems}
 
-Fix exactly these problems. Keep everything else as it is. Output the COMPLETE corrected HTML document in one ```html block and nothing else."""
+Fix exactly these problems. Keep everything else as it is. {doc_note}
+Output the COMPLETE corrected HTML document in one ```html block and nothing else."""
 
 CHECKS_HEADER = "\nAutomated layout checks found these problems (measured in the browser, they are facts, include all of them):\n"
 CHECKS_CLEAN = "\nAutomated layout checks passed: nothing overflows the viewport, no tiny text, no external resources.\n"
@@ -60,7 +66,8 @@ The original hand-drawn sketch is attached for reference. Designer's notes: {des
 {history}
 The designer now asks: "{instruction}"
 
-Apply exactly that change. Keep everything else as it is. Output the COMPLETE updated HTML document in one ```html block and nothing else."""
+Apply exactly that change. Keep everything else as it is. {doc_note}
+Output the COMPLETE updated HTML document in one ```html block and nothing else."""
 
 EDIT_HISTORY = "\nEarlier edits already applied, in order:\n{items}\n"
 
@@ -88,8 +95,11 @@ Rules:
 - The SEARCH text must appear in the current HTML character for character, including indentation. Copy, don't retype.
 - Keep each block as small as possible. Use several blocks for changes in several places (for example a CSS rule and the element that uses it).
 - To insert, SEARCH for the neighbouring line and REPLACE with that line plus the new lines.
-- New styles go in the existing <style> block via their own SEARCH/REPLACE.
+- Prefer the base classes (.btn-primary, .row, .card, ...) over new CSS. If you must add a rule, put it in the page's own <style> (add one before the root div if there is none) via its own SEARCH/REPLACE. Never touch <style id="sb-base">.
 - No explanations, no full document. Only if the request truly needs most of the page rewritten, output the complete document in a single ```html block instead."""
 
-REPAIR = """Your previous reply did not contain a complete HTML document.
-Output the complete mockup now as ONE ```html fenced block containing <!doctype html> through </html>. No commentary."""
+REPAIR = """Your previous reply did not contain the mockup markup.
+Output it now as ONE ```html fenced block: the complete screen markup (a root <div class="screen">, or the complete document if you were given one). No commentary."""
+
+# Appended to prompts that show the model a full document (revise, edit, patch).
+DOC_NOTE = 'The <style id="sb-base"> block is the server\'s base stylesheet, shown collapsed. Leave it exactly as it is; put page-specific rules in a separate <style>.'

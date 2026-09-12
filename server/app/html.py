@@ -4,6 +4,7 @@ import re
 
 _FENCE = re.compile(r"```(?:html|HTML)?\s*\n(.*?)```", re.DOTALL)
 _DOC = re.compile(r"(<!doctype html.*?</html\s*>|<html.*?</html\s*>)", re.DOTALL | re.IGNORECASE)
+_FRAGMENT = re.compile(r"<(?:style|div|section|main|header|nav|form|ul|table)[\s>]", re.IGNORECASE)
 
 APPROVED = "APPROVED"
 
@@ -26,6 +27,12 @@ def extract_html(text: str) -> str | None:
     doc = _DOC.search(text)
     if doc:
         return doc.group(1).strip()
+    frag = _FRAGMENT.search(text)
+    if frag:
+        # Unfenced fragment: from the first block-level tag (or <style>) to the last '>'.
+        end = text.rfind(">")
+        if end > frag.start():
+            return text[frag.start():end + 1].strip()
     return None
 
 
