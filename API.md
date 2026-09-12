@@ -37,6 +37,7 @@ Turn a sketch into a mockup.
 | `model` | no | Ollama tag override, e.g. `gemma4:31b` |
 | `stream` | no | default `true`: emit `draft_partial` events while the model writes |
 | `debug` | no | adds `png_base64` to `checks` events |
+| `format` | no | `phone` (390×844), `tablet` (1180×820, default), or `desktop` (1440×900). Omitted = inferred from `description` keywords ("mobile app" → phone, "web app" → desktop). Compose, render, and judge all use this size. |
 
 ## `POST /api/v1/edit`
 
@@ -87,6 +88,8 @@ finishes, then `{ "connected": true, "login", "avatar_url", "name" }`. The app p
 `503` when the server has no `NANGO_SECRET_KEY`; `502` when Nango or GitHub errors.
 
 ## Event stream
+
+`draft` and `final` events also carry `format`, `width`, `height`: the screen size the HTML was composed for. Render the HTML at that aspect ratio (the app pins the layout viewport to `width` and letterboxes).
 
 Every line has a `type`. Unknown types must be ignored, and unknown fields on known types
 must be ignored, so the server can add things without breaking older app builds.

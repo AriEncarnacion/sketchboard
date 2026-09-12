@@ -9,7 +9,8 @@ Output rules:
 - Output ONLY the screen's markup: one root <div class="screen"> ... </div>. No <!doctype>, <html>, <head>, or <body>; the server wraps it.
 - Prefer the base classes. If something needs a style the classes can't express, add ONE small <style> element before the root div with page-specific rules only. Never re-implement buttons, inputs, cards, bars, or icons in CSS.
 - No external stylesheets, fonts, scripts, or images. Icons are the .icon classes; no emoji.
-- The screen is an iPad in landscape at {width}x{height} CSS px. The root .screen fills it; no page scrolling unless the sketch clearly shows a scrolling list (then put .scroll on that region).
+- The screen is {device} at {width}x{height} CSS px. The root .screen fills it; no page scrolling unless the sketch clearly shows a scrolling list (then put .scroll on that region).
+- The sketch's outer frame IS the screen, whatever its proportions. Never render that frame as a card, phone, or narrow column inside the screen: stretch its contents to the full {width}x{height}. Only content the sketch shows inside the frame gets drawn.
 - Use realistic placeholder content (names, prices, labels), not lorem ipsum.
 - Respect the sketch's layout, hierarchy, and element positions. Boxes with an X are photos: use .image (or .image-hero to fill a column) and never draw the X or your own placeholder. Squiggles are text. Circles are avatars or round buttons depending on context.
 - Two things side by side in the sketch = a .split (or .row) with two children. Things stacked = a .stack.
@@ -22,7 +23,7 @@ Designer's notes: {description}
 
 First, in 3-6 short bullet points, list the UI elements you see and their arrangement.
 Then output the mockup markup in a ```html block, using the base classes.
-Reminder: the sketch is a wireframe. A box with an X is a photo, so render it as a .image (or .image-hero) placeholder with no X. Never reproduce the sketch's crossed lines."""
+Reminder: the sketch is a wireframe. A box with an X is a photo, so render it as a .image (or .image-hero) placeholder with no X. Never reproduce the sketch's crossed lines. The outer frame is the whole screen: fill the full width, do not center a narrow column."""
 
 # Step 1 of the loop: a short verdict, no HTML. Cheap (~100 output tokens).
 JUDGE = """Image 1 above is the original hand-drawn sketch. Image 2 above is a screenshot of the current mockup rendered at {width}x{height}. Both are attached.
@@ -33,6 +34,7 @@ Compare the render to the sketch:
 - Are the same elements present, in the same positions and relative sizes?
 - Sketch conventions: a box with an X means a photo. The render must show a photo placeholder (a soft gradient block), never a literal X or crossed lines. Squiggles mean text. Treating a convention literally is a problem.
 - Is anything overflowing, overlapping, clipped, or off-screen?
+- Does the layout use the whole screen? A narrow column floating in empty space means the sketch's outer frame was drawn as a card instead of being treated as the screen. That is a problem.
 - Is the text legible and the spacing consistent? Does it look like a finished product screen?
 
 Do NOT output any HTML.

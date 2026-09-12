@@ -251,3 +251,27 @@ def test_auth_me(client):
     client.nango.connected = True
     body = client.get("/api/v1/auth/github/me", params={"user_id": UID}).json()
     assert body["connected"] is True and body["login"] == "octocat" and body["avatar_url"]
+
+
+def test_layout_report_flags_narrow_column():
+    from app.render import LayoutReport
+    narrow = LayoutReport(element_count=20, content_width=360, viewport_width=1180)
+    assert not narrow.clean
+    assert "360px of the 1180px" in narrow.summary(1180, 820)
+    wide = LayoutReport(element_count=20, content_width=1100, viewport_width=1180)
+    assert wide.clean and wide.summary(1180, 820) == ""
+    unmeasured = LayoutReport(element_count=20)   # render disabled: no width facts, not a problem
+    assert unmeasured.clean
+
+
+def test_format_detection_and_events(client):
+    from app import formats
+    assert formats.detect("a mobile app for kids") == "phone"
+    assert formats.detect("web app dashboard") == "desktop"
+    assert formats.detect("iPad landscape, but a mobile feel") == "tablet"   # explicit device wins
+    assert formats.detect("login screen") == "tablet"
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "description": "mobile app", "max_iterations": 0}))
+    final = [e for e in evs if e["type"] == "final"][0]
+    assert (final["format"], final["width"], final["height"]) == ("phone", 390, 844)
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "description": "mobile app", "format": "desktop", "max_iterations": 0}))
+    assert [e for e in evs if e["type"] == "final"][0]["width"] == 1440

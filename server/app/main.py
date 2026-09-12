@@ -27,7 +27,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import config, harness, render, sessions, viewer
+from . import config, formats, harness, render, sessions, viewer
 from .gemma import Gemma
 from .nango import Nango
 
@@ -62,6 +62,8 @@ class MockupRequest(BaseModel):
     model: str | None = Field(default=None, pattern=r"^[\w.:-]+$", description="Override the Ollama model tag")
     stream: bool = Field(default=True, description="Emit draft_partial events while the model writes")
     debug: bool = Field(default=False, description="Also stream render screenshots")
+    format: str | None = Field(default=None, pattern=r"^(phone|tablet|desktop)$",
+                               description="Screen format. Omit to infer from the description (default tablet).")
 
 
 class AuthSessionRequest(BaseModel):
@@ -128,9 +130,10 @@ async def readyz() -> JSONResponse:
 async def mockup(req: MockupRequest) -> StreamingResponse:
     sketch = _decode_image(req.image_base64)
     sid = req.session_id or uuid.uuid4().hex[:16]
-    sessions.start(sid, sketch, req.mime, req.description)
+    fmt = req.format or formats.detect(req.description)
+    sessions.start(sid, sketch, req.mime, req.description, fmt)
     events = harness.run(app.state.gemma, sketch, req.mime, req.description,
-                         max_iterations=req.max_iterations, model=req.model, stream=req.stream, debug=req.debug)
+                         max_iterations=req.max_iterations, model=req.model, stream=req.stream, debug=req.debug, fmt=fmt)
     return _ndjson(_prepend({"type": "session", "session_id": sid}, events), sid)
 
 
@@ -143,7 +146,7 @@ async def edit(req: EditRequest) -> StreamingResponse:
     sessions.save(s.id)
     events = harness.edit(app.state.gemma, s.sketch, s.mime, s.description, s.html, req.instruction,
                           s.history[:-1], model=req.model, stream=req.stream, patch_first=req.patch,
-                          debug=req.debug)
+                          debug=req.debug, fmt=s.format)
     return _ndjson(_prepend({"type": "session", "session_id": s.id}, events), s.id)
 
 

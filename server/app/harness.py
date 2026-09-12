@@ -23,7 +23,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from . import basecss, config, patch, prompts, render
+from . import basecss, config, patch, prompts, render, formats
 from .gemma import Gemma, Reply, image_part, text_part
 from .html import extract_html, is_approved, partial_html
 
@@ -36,9 +36,9 @@ PARTIAL_MIN_GROWTH = 48
 PATCH_MAX_TOKENS = 1500
 
 
-def _system() -> dict[str, Any]:
-    return {"role": "system", "content": prompts.SYSTEM.format(
-        width=config.VIEWPORT_W, height=config.VIEWPORT_H, guide=basecss.GUIDE)}
+def _system(fmt: str = formats.DEFAULT) -> dict[str, Any]:
+    w, h, device = formats.FORMATS.get(fmt, formats.FORMATS[formats.DEFAULT])
+    return {"role": "system", "content": prompts.SYSTEM.format(width=w, height=h, device=device, guide=basecss.GUIDE)}
 
 
 async def _ask_for_html(
@@ -94,9 +94,14 @@ def _notes(text: str, html: str | None) -> str:
     return text.strip()[:2000]
 
 
-def _draft_event(iteration: int, reply: Reply, html: str) -> dict[str, Any]:
+def _size(fmt: str) -> dict[str, Any]:
+    w, h = formats.size(fmt)
+    return {"format": fmt, "width": w, "height": h}
+
+
+def _draft_event(iteration: int, reply: Reply, html: str, fmt: str = formats.DEFAULT) -> dict[str, Any]:
     return {
-        "type": "draft", "iteration": iteration, "html": html, "notes": _notes(reply.text, html),
+        "type": "draft", "iteration": iteration, "html": html, "notes": _notes(reply.text, html), **_size(fmt),
         "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
     }
 
@@ -111,7 +116,9 @@ async def run(
     model: str | None = None,
     stream: bool = True,
     debug: bool = False,
+    fmt: str = formats.DEFAULT,
 ) -> AsyncIterator[dict[str, Any]]:
+    W, H = formats.size(fmt)
     iters = config.MAX_ITERATIONS if max_iterations is None else max(0, max_iterations)
     description = description.strip() or "(none)"
     sketch_img = image_part(sketch, mime)
@@ -119,7 +126,7 @@ async def run(
     # --- draft ------------------------------------------------------------------
     yield {"type": "status", "message": f"drafting with {model or gemma.model}"}
     messages = [
-        _system(),
+        _system(fmt),
         {"role": "user", "content": [text_part(prompts.DRAFT.format(description=description)), sketch_img]},
     ]
     reply: Reply
@@ -132,12 +139,12 @@ async def run(
     if html is None:
         yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
         return
-    yield _draft_event(0, reply, html)
+    yield _draft_event(0, reply, html, fmt)
 
     if not render.available():
         if iters > 0:
             yield {"type": "status", "message": "renderer unavailable, skipping critique"}
-        yield {"type": "final", "html": html, "iterations": 0, "approved": False, "chosen": 0}
+        yield {"type": "final", "html": html, "iterations": 0, "approved": False, "chosen": 0, **_size(fmt)}
         return
 
     # --- judge / revise -------------------------------------------------------------
@@ -150,23 +157,23 @@ async def run(
     for n in range(iters + 1):
         yield {"type": "status", "message": f"rendering draft {n}"}
         try:
-            png, report = await render.render(html)
+            png, report = await render.render(html, width=W, height=H)
         except Exception as e:  # noqa: BLE001 - keep serving even if Chromium hiccups
             yield {"type": "status", "message": f"render failed ({e.__class__.__name__}), stopping"}
             scored.append((50, n, html))
             break
-        checks_text = report.summary(config.VIEWPORT_W, config.VIEWPORT_H)
+        checks_text = report.summary(W, H)
         yield {"type": "checks", "iteration": n, "clean": report.clean, "problems": checks_text,
                **({"png_base64": base64.b64encode(png).decode()} if debug else {})}
 
         # Judge: short verdict, no HTML. Cheap, and stops the model from rewriting a good page.
         yield {"type": "status", "message": f"judging draft {n}"}
         checks = (prompts.CHECKS_HEADER + checks_text + "\n") if checks_text else prompts.CHECKS_CLEAN
-        judge = prompts.JUDGE.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H,
+        judge = prompts.JUDGE.format(width=W, height=H,
                                      description=description, checks=checks)
         # Label the images inline: without labels the model occasionally claims the
         # second image is missing even though it was delivered.
-        judge_msgs = [_system(), {"role": "user", "content": [
+        judge_msgs = [_system(fmt), {"role": "user", "content": [
             text_part("Image 1, the hand-drawn sketch:"), sketch_img,
             text_part("Image 2, the rendered mockup screenshot:"), image_part(png, "image/png"),
             text_part(judge),
@@ -199,7 +206,7 @@ async def run(
         # Revise: fix exactly the listed problems.
         yield {"type": "status", "message": f"revising draft {n}"}
         revise = prompts.REVISE.format(html=basecss.strip(html), problems=problems, doc_note=prompts.DOC_NOTE)
-        messages = [_system(), {"role": "user", "content": [text_part(revise), sketch_img]}]
+        messages = [_system(fmt), {"role": "user", "content": [text_part(revise), sketch_img]}]
         new_html: str | None = None
         async for ev in _ask_for_html(gemma, messages, model, iteration=n + 1, stream=stream):
             if ev["type"] == "_result":
@@ -210,7 +217,7 @@ async def run(
             yield {"type": "status", "message": "revision returned no HTML, keeping previous draft"}
             break
         html = new_html
-        yield _draft_event(n + 1, reply, html)
+        yield _draft_event(n + 1, reply, html, fmt)
 
     # Best score wins; on a tie prefer the later draft (it had the fix applied).
     best_score, best_n, best_html = min(scored, key=lambda s: (s[0], -s[1]))
@@ -231,7 +238,9 @@ async def edit(
     stream: bool = True,
     patch_first: bool = True,
     debug: bool = False,
+    fmt: str = formats.DEFAULT,
 ) -> AsyncIterator[dict[str, Any]]:
+    W, H = formats.size(fmt)
     """Apply one follow-up instruction to an existing mockup. A patch call (fast) or a
     full rewrite (fallback), then a render + checks pass so the client gets the same
     event shapes as `run()`."""
@@ -250,7 +259,7 @@ async def edit(
         yield {"type": "status", "message": f"patching with {model or gemma.model}"}
         prompt = prompts.EDIT_PATCH.format(html=shown, description=description, history=hist,
                                            instruction=instruction.strip())
-        reply = await gemma.chat([_system(), {"role": "user", "content": [text_part(prompt), sketch_img]}],
+        reply = await gemma.chat([_system(fmt), {"role": "user", "content": [text_part(prompt), sketch_img]}],
                                  model=model, max_tokens=PATCH_MAX_TOKENS, temperature=0.2)
         hunks = patch.parse(reply.text)
         if hunks:
@@ -271,7 +280,7 @@ async def edit(
         yield {"type": "status", "message": f"editing with {model or gemma.model}"}
         prompt = prompts.EDIT.format(html=shown, description=description, history=hist,
                                      instruction=instruction.strip(), doc_note=prompts.DOC_NOTE)
-        messages = [_system(), {"role": "user", "content": [text_part(prompt), sketch_img]}]
+        messages = [_system(fmt), {"role": "user", "content": [text_part(prompt), sketch_img]}]
         async for ev in _ask_for_html(gemma, messages, model, iteration=0, stream=stream):
             if ev["type"] == "_result":
                 reply, new_html = ev["reply"], ev["html"]
@@ -280,17 +289,17 @@ async def edit(
         if new_html is None:
             yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
             return
-    yield {**_draft_event(0, reply, new_html), "patched": patched}
+    yield {**_draft_event(0, reply, new_html, fmt), "patched": patched}
 
     score = 0
     if render.available():
         try:
-            png, report = await render.render(new_html)
-            checks_text = report.summary(config.VIEWPORT_W, config.VIEWPORT_H)
+            png, report = await render.render(new_html, width=W, height=H)
+            checks_text = report.summary(W, H)
             score = 3 * len(checks_text.splitlines())
             yield {"type": "checks", "iteration": 0, "clean": report.clean, "problems": checks_text,
                    **({"png_base64": base64.b64encode(png).decode()} if debug else {})}
         except Exception as e:  # noqa: BLE001
             yield {"type": "status", "message": f"render failed ({e.__class__.__name__})"}
 
-    yield {"type": "final", "html": new_html, "iterations": 0, "approved": False, "chosen": 0, "score": score}
+    yield {"type": "final", "html": new_html, "iterations": 0, "approved": False, "chosen": 0, "score": score, **_size(fmt)}

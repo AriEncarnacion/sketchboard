@@ -47,11 +47,17 @@ class LayoutReport:
     tiny_text: list[str] = field(default_factory=list)    # font-size < 11px
     external_refs: list[str] = field(default_factory=list)  # src/href to http(s) that we blocked
     console_errors: list[str] = field(default_factory=list)
+    content_width: int = 0                                # span of the non-full-width content, px
+    viewport_width: int = 0
+
+    def underfilled(self, width: int) -> bool:
+        # ponytail: 70% threshold; a sketch frame drawn as a phone-shaped card lands ~30-45%.
+        return bool(width) and self.element_count >= 5 and 0 < self.content_width < 0.7 * width
 
     @property
     def clean(self) -> bool:
         return not (self.overflow_x or self.overflow_y or self.tiny_text or self.external_refs
-                    or self.console_errors or self.element_count < 5)
+                    or self.console_errors or self.element_count < 5 or self.underfilled(self.viewport_width))
 
     def summary(self, width: int, height: int) -> str:
         """Bullet list for the prompt. Empty string when there's nothing to say."""
@@ -70,6 +76,9 @@ class LayoutReport:
             lines.append("text smaller than 11px (illegible on iPad): " + ", ".join(self.tiny_text[:6]))
         if self.external_refs:
             lines.append("external resources (blocked, will not load on device): " + ", ".join(self.external_refs[:4]))
+        if self.underfilled(width):
+            pct = round(100 * self.content_width / width)
+            lines.append(f"content spans only {self.content_width}px of the {width}px screen ({pct}%), a narrow column in empty space; the sketch's outer frame is the screen itself, so the layout must fill the full width")
         if self.console_errors:
             lines.append("script errors: " + "; ".join(self.console_errors[:3]))
         return "\n".join(f"- {l}" for l in lines)
@@ -87,11 +96,14 @@ _LAYOUT_JS = """
   };
   const all = Array.from(document.body.querySelectorAll('*'));
   const ox = [], oy = [], tiny = [];
+  let cl = Infinity, cr = -Infinity;
   for (const el of all) {
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') continue;
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;
+    // Content span: ignore full-width wrappers so a centered narrow column shows up as narrow.
+    if (r.width < W * 0.95 && r.width > 0) { cl = Math.min(cl, r.left); cr = Math.max(cr, r.right); }
     if (r.right > W + 2 && r.left < W && ox.length < 12) ox.push(label(el));
     if (r.bottom > H + 2 && r.top < H && oy.length < 12) oy.push(label(el));
     const hasOwnText = Array.from(el.childNodes).some(n => n.nodeType === 3 && n.textContent.trim());
@@ -106,6 +118,7 @@ _LAYOUT_JS = """
     scroll_height: document.documentElement.scrollHeight,
     scroll_width: document.documentElement.scrollWidth,
     overflow_x: ox, overflow_y: oy, tiny_text: tiny, external_refs: ext,
+    content_width: cr > cl ? Math.round(Math.min(cr, W) - Math.max(cl, 0)) : 0,
   };
 }
 """
@@ -124,7 +137,7 @@ async def render(html: str, *, width: int = config.VIEWPORT_W, height: int = con
         await page.wait_for_timeout(150)  # let fonts/layout settle
         png = await page.screenshot(type="png", full_page=False)
         facts = await page.evaluate(_LAYOUT_JS, [width, height])
-        report = LayoutReport(console_errors=errors, **facts)
+        report = LayoutReport(console_errors=errors, viewport_width=width, **facts)
         return png, report
     finally:
         await page.close()

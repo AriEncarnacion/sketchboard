@@ -23,19 +23,20 @@ class Session:
     sketch: bytes
     mime: str
     description: str
+    format: str = "tablet"
     html: str = ""
     history: list[str] = field(default_factory=list)   # edit instructions, in order
     touched: float = field(default_factory=time.time)  # wall clock: survives restarts
 
     def to_json(self) -> dict:
         return {"id": self.id, "sketch_base64": base64.b64encode(self.sketch).decode(), "mime": self.mime,
-                "description": self.description, "html": self.html, "history": self.history,
+                "description": self.description, "format": self.format, "html": self.html, "history": self.history,
                 "touched": self.touched}
 
     @classmethod
     def from_json(cls, d: dict) -> "Session":
         return cls(id=d["id"], sketch=base64.b64decode(d["sketch_base64"]), mime=d["mime"],
-                   description=d.get("description", ""), html=d.get("html", ""),
+                   description=d.get("description", ""), format=d.get("format", "tablet"), html=d.get("html", ""),
                    history=list(d.get("history", [])), touched=float(d.get("touched", time.time())))
 
 
@@ -87,9 +88,9 @@ def _evict_cache() -> None:
         del _cache[oldest.id]
 
 
-def start(sid: str, sketch: bytes, mime: str, description: str) -> Session:
+def start(sid: str, sketch: bytes, mime: str, description: str, fmt: str = "tablet") -> Session:
     _evict_cache()
-    s = Session(id=sid, sketch=sketch, mime=mime, description=description)
+    s = Session(id=sid, sketch=sketch, mime=mime, description=description, format=fmt)
     _cache[sid] = s
     _save(s)
     return s

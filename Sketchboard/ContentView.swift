@@ -355,7 +355,10 @@ struct ContentView: View {
 
             ZStack {
                 if let html = model.html {
-                    MockupWebView(html: html)
+                    // Phone mockups stay phone-shaped; the web view scales to fit whichever side binds.
+                    MockupWebView(html: html, designWidth: Int(model.mockupSize.width))
+                        .aspectRatio(model.mockupSize.width / model.mockupSize.height, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if model.isBusy {
                     BusyState(status: model.status)
                 } else {

@@ -10,6 +10,7 @@ final class MockupViewModel {
     var editText = ""
     var status = "Draw a screen, then tap Generate."
     var html: String?
+    var mockupSize = CGSize(width: 1180, height: 820)   // from the server's draft/final events
     var sessionId: String?
     var isBusy = false
     var backendOnline: Bool?      // nil = not checked yet
@@ -140,6 +141,7 @@ final class MockupViewModel {
             status = e.message ?? status
         case .draft:
             if let h = e.html { html = h }
+            if let w = e.width, let h = e.height { mockupSize = CGSize(width: w, height: h) }
             status = "Draft \(e.iteration ?? 0) in \(Int(e.seconds ?? 0)) s"
         case .checks:
             lastProblems = (e.clean ?? true) ? nil : e.problems
@@ -152,6 +154,7 @@ final class MockupViewModel {
             status = "Approved."
         case .final:
             if let h = e.html { html = h }
+            if let w = e.width, let h = e.height { mockupSize = CGSize(width: w, height: h) }
             status = (e.approved ?? false) ? "Done (approved)." : "Done (best of \((e.iterations ?? 0) + 1) drafts)."
         case .error:
             errorMessage = e.message ?? "Server error"
