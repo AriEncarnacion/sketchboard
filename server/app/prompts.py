@@ -49,5 +49,20 @@ Fix exactly these problems. Keep everything else as it is. Output the COMPLETE c
 CHECKS_HEADER = "\nAutomated layout checks found these problems (measured in the browser, they are facts, include all of them):\n"
 CHECKS_CLEAN = "\nAutomated layout checks passed: nothing overflows the viewport, no tiny text, no external resources.\n"
 
+# Follow-up edit on an existing mockup. The sketch is attached again for context.
+EDIT = """Here is the current mockup HTML:
+
+```html
+{html}
+```
+
+The original hand-drawn sketch is attached for reference. Designer's notes: {description}
+{history}
+The designer now asks: "{instruction}"
+
+Apply exactly that change. Keep everything else as it is. Output the COMPLETE updated HTML document in one ```html block and nothing else."""
+
+EDIT_HISTORY = "\nEarlier edits already applied, in order:\n{items}\n"
+
 REPAIR = """Your previous reply did not contain a complete HTML document.
 Output the complete mockup now as ONE ```html fenced block containing <!doctype html> through </html>. No commentary."""

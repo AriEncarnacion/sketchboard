@@ -144,3 +144,46 @@ async def run(
     best_score, best_n, best_html = min(scored, key=lambda s: (s[0], -s[1]))
     yield {"type": "final", "html": best_html, "iterations": n, "approved": approved_at is not None,
            "chosen": best_n, "score": best_score}
+
+
+async def edit(
+    gemma: Gemma,
+    sketch: bytes,
+    mime: str,
+    description: str,
+    html: str,
+    instruction: str,
+    history: list[str],
+    *,
+    model: str | None = None,
+    debug: bool = False,
+) -> AsyncIterator[dict[str, Any]]:
+    """Apply one follow-up instruction to an existing mockup. Single revise call plus a
+    render + checks pass so the client gets the same event shapes as `run()`."""
+    description = description.strip() or "(none)"
+    hist = prompts.EDIT_HISTORY.format(items="\n".join(f"- {h}" for h in history)) if history else ""
+    prompt = prompts.EDIT.format(html=html, description=description, history=hist, instruction=instruction.strip())
+
+    yield {"type": "status", "message": f"editing with {model or gemma.model}"}
+    messages = [_system(), {"role": "user", "content": [text_part(prompt), image_part(sketch, mime)]}]
+    reply, new_html = await _ask_for_html(gemma, messages, model)
+    if new_html is None:
+        yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
+        return
+    yield {
+        "type": "draft", "iteration": 0, "html": new_html, "notes": _notes(reply.text, new_html),
+        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
+    }
+
+    score = 0
+    if render.available():
+        try:
+            png, report = await render.render(new_html)
+            checks_text = report.summary(config.VIEWPORT_W, config.VIEWPORT_H)
+            score = 3 * len(checks_text.splitlines())
+            yield {"type": "checks", "iteration": 0, "clean": report.clean, "problems": checks_text,
+                   **({"png_base64": base64.b64encode(png).decode()} if debug else {})}
+        except Exception as e:  # noqa: BLE001
+            yield {"type": "status", "message": f"render failed ({e.__class__.__name__})"}
+
+    yield {"type": "final", "html": new_html, "iterations": 0, "approved": False, "chosen": 0, "score": score}

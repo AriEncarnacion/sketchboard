@@ -7,10 +7,19 @@ targets:
   Sketchboard:
     type: application
     platform: iOS
-    sources: [Sketchboard]
+    sources:
+      - path: Sketchboard
+        excludes: ["Config/*.xcconfig*"]
+    # Optional, git-ignored. Copy Sketchboard/Config/Secrets.xcconfig.example to Secrets.xcconfig.
+    # Missing file = empty values; the app's Settings sheet can supply them at runtime instead.
+    configFiles:
+      Debug: Sketchboard/Config/Secrets.xcconfig
+      Release: Sketchboard/Config/Secrets.xcconfig
     info:
       path: Sketchboard/Info.plist
       properties:
+        GemmaBaseURL: $(GEMMA_BASE_URL)
+        GemmaToken: $(GEMMA_TOKEN)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight, UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown]
         NSLocalNetworkUsageDescription: Talks to the Gemma server on your local network.
