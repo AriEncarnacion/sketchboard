@@ -4,13 +4,16 @@
   GET  /readyz              Ollama is up and has the model (503 otherwise)
   POST /api/v1/mockup       sketch + notes -> NDJSON event stream (see harness.py)
   POST /api/v1/edit         follow-up instruction on a session's last mockup -> same stream
-  GET  /api/v1/session/{id} last html for a session (reconnect / debugging)
+  GET  /api/v1/session/{id} last html for a session (reconnect / debugging) + viewer_url
+  GET  /api/v1/session/{id}/render.png  screenshot of the current mockup (viewer.py)
+  GET  /m/{id}?t=sig        public, signed viewer page for sharing (viewer.py)
   POST /api/v1/auth/github/session  {user_id} -> Nango Connect UI link for "Sign in with GitHub"
   GET  /api/v1/auth/github/me?user_id=  {connected, login, avatar_url, name}
 
 Runs behind nginx on the Lambda box; nginx does the bearer-token check.
 """
 
+import asyncio
 import base64
 import binascii
 import json
@@ -24,7 +27,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import config, harness, render, sessions
+from . import config, harness, render, sessions, viewer
 from .gemma import Gemma
 from .nango import Nango
 
@@ -35,6 +38,8 @@ API_VERSION = 1
 async def lifespan(app: FastAPI):
     app.state.gemma = Gemma()
     app.state.nango = Nango()
+    # Start Chromium in the background so the first mockup doesn't pay its launch cost.
+    app.state.warm_task = asyncio.create_task(render.warm())
     yield
     await app.state.gemma.aclose()
     await app.state.nango.aclose()
@@ -135,6 +140,7 @@ async def edit(req: EditRequest) -> StreamingResponse:
     if s is None or not s.html:
         raise HTTPException(404, "unknown session or no mockup yet; call /api/v1/mockup first")
     s.history.append(req.instruction.strip())
+    sessions.save(s.id)
     events = harness.edit(app.state.gemma, s.sketch, s.mime, s.description, s.html, req.instruction,
                           s.history[:-1], model=req.model, stream=req.stream, patch_first=req.patch,
                           debug=req.debug)
@@ -146,7 +152,8 @@ async def session(session_id: str) -> dict[str, Any]:
     s = sessions.get(session_id)
     if s is None:
         raise HTTPException(404, "unknown session")
-    return {"session_id": s.id, "description": s.description, "html": s.html, "history": s.history}
+    return {"session_id": s.id, "description": s.description, "html": s.html, "history": s.history,
+            "viewer_url": viewer.viewer_url(s.id) if s.html else None}
 
 
 @v1.post("/auth/github/session")
@@ -175,6 +182,7 @@ async def auth_github_me(user_id: str = Query(pattern=r"^[A-Za-z0-9._-]{20,64}$"
 
 
 app.include_router(v1)
+app.include_router(viewer.router)
 
 # Unversioned alias from the first scaffold; remove once the app is on /api/v1.
 app.add_api_route("/api/mockup", mockup, methods=["POST"], include_in_schema=False)

@@ -17,6 +17,7 @@
 #   lambda/lambdactl.sh deploy       rsync server/ to the box and (re)install the harness
 #   lambda/lambdactl.sh mockup <img> [notes]  full harness round trip, streams events
 #   lambda/lambdactl.sh edit "<instruction>"  follow-up edit on the last mockup's session
+#   lambda/lambdactl.sh deploy-slack rsync slack/ to the box and (re)install the Slack bot
 #   lambda/lambdactl.sh terminate    terminate the instance (asks for confirmation)
 #
 # Config lives in lambda/.env (see lambda/.env.example). Needs curl + jq.
@@ -288,8 +289,20 @@ cmd_deploy() {
   echo "syncing server/ -> ubuntu@$ip:sketchboard-server/"
   rsync -az --delete --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude '*.pyc' \
     -e "ssh ${sshopts[*]}" "$src" "ubuntu@$ip:sketchboard-server/"
-  ssh "${sshopts[@]}" "ubuntu@$ip" "GEMMA_TOKEN='$GEMMA_TOKEN' OLLAMA_MODEL='$OLLAMA_MODEL' NANGO_SECRET_KEY='${NANGO_SECRET_KEY:-}' NANGO_INTEGRATION_ID='${NANGO_INTEGRATION_ID:-github}' bash ~/sketchboard-server/install.sh"
+  ssh "${sshopts[@]}" "ubuntu@$ip" "GEMMA_TOKEN='$GEMMA_TOKEN' OLLAMA_MODEL='$OLLAMA_MODEL' PUBLIC_BASE_URL='http://$ip:$PORT' VIEWER_SECRET='$GEMMA_TOKEN' NANGO_SECRET_KEY='${NANGO_SECRET_KEY:-}' NANGO_INTEGRATION_ID='${NANGO_INTEGRATION_ID:-github}' bash ~/sketchboard-server/install.sh"
   echo; echo "public check:"; cmd_health
+}
+
+# deploy-slack: rsync ../slack to the box and (re)install the Slack bot. See slack/README.md.
+cmd_deploy_slack() {
+  local ip; ip="$(instance_ip)"; [[ -n "$ip" ]] || die "instance has no IP yet"
+  [[ -n "${SLACK_BOT_TOKEN:-}" && -n "${SLACK_APP_TOKEN:-}" ]] || die "SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set in $ENV_FILE (see slack/README.md)"
+  local key="${LAMBDA_SSH_KEY_FILE%.pub}" src="$HERE/../slack/"
+  local sshopts=(-i "$key" -o StrictHostKeyChecking=accept-new)
+  echo "syncing slack/ -> ubuntu@$ip:sketchboard-slack/"
+  rsync -az --delete --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude '*.pyc' \
+    -e "ssh ${sshopts[*]}" "$src" "ubuntu@$ip:sketchboard-slack/"
+  ssh "${sshopts[@]}" "ubuntu@$ip" "SLACK_BOT_TOKEN='$SLACK_BOT_TOKEN' SLACK_APP_TOKEN='$SLACK_APP_TOKEN' SLACK_REQUIRE_MENTION='${SLACK_REQUIRE_MENTION:-0}' bash ~/sketchboard-slack/install.sh"
 }
 
 # mockup <image> [description]  -- full harness round trip, prints each streamed event
@@ -381,6 +394,7 @@ case "$cmd" in
   deploy)    cmd_deploy ;;
   mockup)    cmd_mockup "$@" ;;
   edit)      cmd_edit "$@" ;;
+  deploy-slack) cmd_deploy_slack ;;
   terminate) cmd_terminate ;;
   *) sed -n '2,20p' "$0"; exit 1 ;;
 esac

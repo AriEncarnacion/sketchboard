@@ -1,0 +1,15 @@
+[Unit]
+Description=Sketchboard Slack bot (Socket Mode, talks to the harness on localhost)
+After=network-online.target sketchboard.service
+Wants=network-online.target sketchboard.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/sketchboard-slack
+EnvironmentFile=/opt/sketchboard-slack/.env
+ExecStart=/opt/sketchboard-slack/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
