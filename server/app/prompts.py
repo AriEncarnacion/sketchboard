@@ -21,7 +21,7 @@ First, in 3-6 short bullet points, list the UI elements you see and their arrang
 Then output the complete HTML mockup in a ```html block."""
 
 # Step 1 of the loop: a short verdict, no HTML. Cheap (~100 output tokens).
-JUDGE = """The first image is the original hand-drawn sketch. The second image is a screenshot of the current mockup rendered at {width}x{height}.
+JUDGE = """Image 1 above is the original hand-drawn sketch. Image 2 above is a screenshot of the current mockup rendered at {width}x{height}. Both are attached.
 
 Designer's notes: {description}
 {checks}

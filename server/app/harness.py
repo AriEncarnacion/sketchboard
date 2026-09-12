@@ -39,6 +39,11 @@ async def _ask_for_html(gemma: Gemma, messages: list[dict[str, Any]], model: str
     return reply, html
 
 
+def _looks_like_problems(text: str) -> bool:
+    """A judge reply we can act on: at least one bullet line."""
+    return any(line.strip().startswith(("-", "*", "•")) for line in text.splitlines())
+
+
 def _notes(text: str, html: str | None) -> str:
     """Whatever the model said before the code block, trimmed."""
     if html and html in text:
@@ -105,10 +110,21 @@ async def run(
         checks = (prompts.CHECKS_HEADER + checks_text + "\n") if checks_text else prompts.CHECKS_CLEAN
         judge = prompts.JUDGE.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H,
                                      description=description, checks=checks)
-        verdict = await gemma.chat(
-            [_system(), {"role": "user", "content": [text_part(judge), sketch_img, image_part(png, "image/png")]}],
-            model=model, max_tokens=400, temperature=0.1,
-        )
+        # Label the images inline: without labels the model occasionally claims the
+        # second image is missing even though it was delivered.
+        judge_msgs = [_system(), {"role": "user", "content": [
+            text_part("Image 1, the hand-drawn sketch:"), sketch_img,
+            text_part("Image 2, the rendered mockup screenshot:"), image_part(png, "image/png"),
+            text_part(judge),
+        ]}]
+        verdict = await gemma.chat(judge_msgs, model=model, max_tokens=400, temperature=0.1)
+        if not is_approved(verdict.text) and not _looks_like_problems(verdict.text):
+            # Not a verdict (e.g. "please provide the screenshot"). One retry, then fall back.
+            verdict = await gemma.chat(judge_msgs, model=model, max_tokens=400, temperature=0.3)
+            if not is_approved(verdict.text) and not _looks_like_problems(verdict.text):
+                yield {"type": "status", "message": "judge gave no verdict, using automated checks only"}
+                verdict.text = ("APPROVED" if not checks_text
+                                else "\n".join(f"- {l.lstrip('- ')}" for l in checks_text.splitlines()))
         if is_approved(verdict.text):
             approved_at = n
             scored.append((0, n, html))
