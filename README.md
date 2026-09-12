@@ -25,6 +25,12 @@ iPad app: sketch a UI with Apple Pencil, Gemma 4 turns it into a rendered mockup
 4. Pick the iPad in the scheme dropdown, Run. On first launch: iPad Settings → General → VPN & Device Management → trust your Apple ID. Run again.
 5. Free signing expires after 7 days; just Run from Xcode again.
 
+## Gemma backend (Lambda Cloud)
+
+See [lambda/README.md](lambda/README.md). Short version: put your Lambda API key in
+`lambda/.env`, then `lambda/lambdactl.sh launch && lambda/lambdactl.sh wait`. It prints the
+base URL and bearer token the app needs.
+
 ## Agents
 
 Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`. To let them drive Xcode, enable Xcode → Settings → Intelligence → Model Context Protocol → Xcode Tools, then follow Apple's docs to register `xcrun mcpbridge` with your agent.

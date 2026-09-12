@@ -1,0 +1,86 @@
+#cloud-config
+# Rendered by lambdactl.sh: __OLLAMA_MODEL__ and __GEMMA_TOKEN__ are substituted at launch.
+#
+# What this does on first boot of a Lambda Stack image:
+#   1. Installs Ollama, bound to localhost only, model kept resident in VRAM.
+#   2. Installs nginx on :8080 as a bearer-token gate in front of Ollama.
+#   3. Pulls the Gemma model and warms it up.
+#   4. Touches /var/lib/sketchboard/ready so `lambdactl.sh wait` knows we're done.
+#
+# Ollama exposes an OpenAI-compatible API, so the app talks to
+#   http://<ip>:8080/v1/chat/completions   with   Authorization: Bearer <GEMMA_TOKEN>
+
+package_update: true
+packages:
+  - nginx
+
+write_files:
+  - path: /etc/systemd/system/ollama.service.d/override.conf
+    permissions: "0644"
+    content: |
+      [Service]
+      Environment="OLLAMA_HOST=127.0.0.1:11434"
+      Environment="OLLAMA_KEEP_ALIVE=-1"
+      Environment="OLLAMA_CONTEXT_LENGTH=16384"
+      Environment="OLLAMA_NUM_PARALLEL=2"
+
+  - path: /etc/nginx/sites-available/gemma
+    permissions: "0644"
+    content: |
+      server {
+          listen 8080;
+          client_max_body_size 50m;
+
+          # Unauthenticated liveness probe.
+          location = /healthz {
+              default_type text/plain;
+              return 200 "ok\n";
+          }
+
+          # Reports whether the model finished downloading. Unauthenticated, no secrets.
+          location = /readyz {
+              default_type text/plain;
+              try_files /ready =503;
+              root /var/lib/sketchboard;
+          }
+
+          location / {
+              if ($http_authorization != "Bearer __GEMMA_TOKEN__") {
+                  return 401;
+              }
+              proxy_pass http://127.0.0.1:11434;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_read_timeout 600s;
+              proxy_send_timeout 600s;
+              proxy_buffering off;
+          }
+      }
+
+  - path: /usr/local/bin/sketchboard-warm
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Pull the model and load it into VRAM. Safe to re-run.
+      set -euo pipefail
+      MODEL="__OLLAMA_MODEL__"
+      until curl -fsS http://127.0.0.1:11434/api/version >/dev/null; do sleep 2; done
+      ollama pull "$MODEL"
+      curl -fsS http://127.0.0.1:11434/api/generate \
+        -d "{\"model\":\"$MODEL\",\"keep_alive\":-1}" >/dev/null
+      mkdir -p /var/lib/sketchboard
+      echo "$MODEL" > /var/lib/sketchboard/ready
+
+runcmd:
+  - curl -fsSL https://ollama.com/install.sh | sh
+  - systemctl daemon-reload
+  - systemctl enable --now ollama
+  - systemctl restart ollama
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/gemma /etc/nginx/sites-enabled/gemma
+  - nginx -t
+  - systemctl enable --now nginx
+  - systemctl restart nginx
+  - /usr/local/bin/sketchboard-warm > /var/log/sketchboard-warm.log 2>&1
+
+final_message: "sketchboard cloud-init finished after $UPTIME seconds"

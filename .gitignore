@@ -4,3 +4,11 @@ xcuserdata/
 DerivedData/
 .DS_Store
 *.swp
+
+# Lambda / Gemma secrets and state
+lambda/.env
+lambda/.instance
+server/.venv/
+__pycache__/
+.pytest_cache/
+lambda/.last-mockup.html
