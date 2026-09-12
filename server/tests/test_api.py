@@ -245,3 +245,16 @@ def test_layout_report_flags_narrow_column():
     assert wide.clean and wide.summary(1180, 820) == ""
     unmeasured = LayoutReport(element_count=20)   # render disabled: no width facts, not a problem
     assert unmeasured.clean
+
+
+def test_format_detection_and_events(client):
+    from app import formats
+    assert formats.detect("a mobile app for kids") == "phone"
+    assert formats.detect("web app dashboard") == "desktop"
+    assert formats.detect("iPad landscape, but a mobile feel") == "tablet"   # explicit device wins
+    assert formats.detect("login screen") == "tablet"
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "description": "mobile app", "max_iterations": 0}))
+    final = [e for e in evs if e["type"] == "final"][0]
+    assert (final["format"], final["width"], final["height"]) == ("phone", 390, 844)
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "description": "mobile app", "format": "desktop", "max_iterations": 0}))
+    assert [e for e in evs if e["type"] == "final"][0]["width"] == 1440

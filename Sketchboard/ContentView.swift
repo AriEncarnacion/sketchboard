@@ -160,7 +160,10 @@ struct ContentView: View {
             .padding(.horizontal, 10).padding(.bottom, 8)
             ZStack {
                 if let html = model.html {
-                    MockupWebView(html: html)
+                    // Phone mockups stay phone-shaped; the web view scales to fit whichever side binds.
+                    MockupWebView(html: html, designWidth: Int(model.mockupSize.width))
+                        .aspectRatio(model.mockupSize.width / model.mockupSize.height, contentMode: .fit)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ContentUnavailableView(
                         model.isConfigured ? "No mockup yet" : "Backend not configured",

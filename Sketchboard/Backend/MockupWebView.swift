@@ -5,13 +5,12 @@ import WebKit
 /// content (see API.md), so we load it as a string with a nil base URL.
 struct MockupWebView: UIViewRepresentable {
     let html: String
+    /// The width the server composed for (draft/final events). Pinning the layout viewport
+    /// to it means WebKit scales the page to whatever width the view has instead of
+    /// laying out at some other width and clipping.
+    var designWidth: Int = 1180
 
-    /// The server composes for this width (API.md). Pinning the layout viewport to it means
-    /// WebKit scales the page to whatever width the pane happens to have — full screen or
-    /// half — instead of laying out at some other width and clipping.
-    private static let designWidth = 1180
-
-    private static let fitViewport = """
+    private static func fitViewport(_ designWidth: Int) -> String { """
     (function() {
       var m = document.querySelector('meta[name=viewport]');
       if (!m) {
@@ -21,14 +20,14 @@ struct MockupWebView: UIViewRepresentable {
       }
       m.setAttribute('content', 'width=\(designWidth), shrink-to-fit=yes');
     })();
-    """
+    """ }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         // Runs for every load, so server HTML and the sample page size the same way.
         config.userContentController.addUserScript(
-            WKUserScript(source: Self.fitViewport, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+            WKUserScript(source: Self.fitViewport(designWidth), injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         )
         let view = WKWebView(frame: .zero, configuration: config)
         view.isOpaque = false
@@ -39,8 +38,13 @@ struct MockupWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: WKWebView, context: Context) {
-        guard context.coordinator.lastHTML != html else { return }
+        guard context.coordinator.lastHTML != html || context.coordinator.lastWidth != designWidth else { return }
         context.coordinator.lastHTML = html
+        context.coordinator.lastWidth = designWidth
+        view.configuration.userContentController.removeAllUserScripts()
+        view.configuration.userContentController.addUserScript(
+            WKUserScript(source: Self.fitViewport(designWidth), injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        )
         view.loadHTMLString(html, baseURL: nil)
     }
 
@@ -48,5 +52,6 @@ struct MockupWebView: UIViewRepresentable {
 
     final class Coordinator {
         var lastHTML: String?
+        var lastWidth: Int?
     }
 }

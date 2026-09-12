@@ -17,6 +17,7 @@ class Session:
     sketch: bytes
     mime: str
     description: str
+    format: str = "tablet"
     html: str = ""
     history: list[str] = field(default_factory=list)   # edit instructions, in order
     touched: float = field(default_factory=time.monotonic)
@@ -34,9 +35,9 @@ def _evict() -> None:
         del _sessions[oldest.id]
 
 
-def start(sid: str, sketch: bytes, mime: str, description: str) -> Session:
+def start(sid: str, sketch: bytes, mime: str, description: str, fmt: str = "tablet") -> Session:
     _evict()
-    s = Session(id=sid, sketch=sketch, mime=mime, description=description)
+    s = Session(id=sid, sketch=sketch, mime=mime, description=description, format=fmt)
     _sessions[sid] = s
     return s
 

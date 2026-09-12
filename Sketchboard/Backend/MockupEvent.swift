@@ -30,9 +30,13 @@ struct MockupEvent: Decodable, Sendable {
     let chosen: Int?
     let iterations: Int?
     let pngBase64: String?
+    // draft / final: the screen format the server composed for
+    let format: String?
+    let width: Int?
+    let height: Int?
 
     enum CodingKeys: String, CodingKey {
-        case type, message, iteration, html, notes, seconds, tokens, clean, problems, score, approved, chosen, iterations
+        case type, message, iteration, html, notes, seconds, tokens, clean, problems, score, approved, chosen, iterations, format, width, height
         case sessionId = "session_id"
         case pngBase64 = "png_base64"
     }

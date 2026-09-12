@@ -9,7 +9,7 @@ Output rules:
 - Output ONLY the screen's markup: one root <div class="screen"> ... </div>. No <!doctype>, <html>, <head>, or <body>; the server wraps it.
 - Prefer the base classes. If something needs a style the classes can't express, add ONE small <style> element before the root div with page-specific rules only. Never re-implement buttons, inputs, cards, bars, or icons in CSS.
 - No external stylesheets, fonts, scripts, or images. Icons are the .icon classes; no emoji.
-- The screen is an iPad in landscape at {width}x{height} CSS px. The root .screen fills it; no page scrolling unless the sketch clearly shows a scrolling list (then put .scroll on that region).
+- The screen is {device} at {width}x{height} CSS px. The root .screen fills it; no page scrolling unless the sketch clearly shows a scrolling list (then put .scroll on that region).
 - The sketch's outer frame IS the screen, whatever its proportions. Never render that frame as a card, phone, or narrow column inside the screen: stretch its contents to the full {width}x{height}. Only content the sketch shows inside the frame gets drawn.
 - Use realistic placeholder content (names, prices, labels), not lorem ipsum.
 - Respect the sketch's layout, hierarchy, and element positions. Boxes with an X are photos: use .image (or .image-hero to fill a column) and never draw the X or your own placeholder. Squiggles are text. Circles are avatars or round buttons depending on context.
