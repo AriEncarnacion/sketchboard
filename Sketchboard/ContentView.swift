@@ -13,15 +13,22 @@ struct ContentView: View {
     }
 }
 
-// Wraps Apple's PencilKit canvas for SwiftUI.
 struct Canvas: UIViewRepresentable {
     @Binding var strokeCount: Int
+    private let toolPicker = PKToolPicker()
 
     func makeUIView(context: Context) -> PKCanvasView {
         let view = PKCanvasView()
-        view.drawingPolicy = .anyInput // ponytail: lets mouse/finger draw in Simulator; .pencilOnly for the real demo
+        view.drawingPolicy = .anyInput
         view.tool = PKInkingTool(.pen, color: .black, width: 4)
         view.delegate = context.coordinator
+
+        // Deferred: view isn't in the window yet, so becomeFirstResponder() would no-op here.
+        DispatchQueue.main.async {
+            toolPicker.setVisible(true, forFirstResponder: view)
+            toolPicker.addObserver(view)
+            view.becomeFirstResponder()
+        }
         return view
     }
 
@@ -32,7 +39,6 @@ struct Canvas: UIViewRepresentable {
         let parent: Canvas
         init(_ parent: Canvas) { self.parent = parent }
 
-        // Fires after every stroke. Tomorrow: debounce here, snapshot, POST to Gemma for a UI mockup.
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
             parent.strokeCount = canvasView.drawing.strokes.count
         }
