@@ -50,10 +50,21 @@ Apply a follow-up instruction to the session's current mockup.
 `404` if the session is unknown or has no mockup yet. Sessions live in server memory for
 6 hours of inactivity; a server restart clears them. Same stream shape as `/mockup`.
 
+## Sharing: `GET /m/{id}?t=<sig>` and `GET /api/v1/session/{id}/render.png`
+
+`/m/{id}?t=<sig>` serves the session's current HTML as a plain page. It is **public** (no
+bearer); the signature `t` is an HMAC of the id with a server secret, so links can't be
+guessed. Get the link from `viewer_url` in the session response; never build it by hand.
+Sessions persist on disk on the box for 24 h of inactivity and survive deploys.
+
+`/api/v1/session/{id}/render.png` returns a screenshot of the current mockup at
+1180×820 (bearer-gated like the rest of `/api/`). The Slack bot posts this.
+
 ## `GET /api/v1/session/{id}`
 
-`{ "session_id", "description", "html", "history": ["edit 1", "edit 2"] }`. For reconnects
-and debugging.
+`{ "session_id", "description", "html", "history": ["edit 1", "edit 2"], "viewer_url" }`.
+For reconnects, sharing, and debugging. `viewer_url` is null until there is a mockup or
+when the server has no public URL configured.
 
 ## Auth: `POST /api/v1/auth/github/session` and `GET /api/v1/auth/github/me`
 

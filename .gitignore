@@ -16,3 +16,6 @@ lambda/.last-render-*.png
 Sketchboard/Config/Secrets.xcconfig
 lambda/.last-session
 lambda/.last-mockup-partial.html
+server/sessions/
+slack/.venv/
+discordbot/.venv/

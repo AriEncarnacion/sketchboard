@@ -148,6 +148,18 @@ async def screenshot(html: str, **kw) -> bytes:
     return png
 
 
+async def warm() -> bool:
+    """Launch the browser and do one throwaway render so the first real request doesn't
+    pay the Chromium start-up cost. Safe to call when rendering is unavailable."""
+    if not available():
+        return False
+    try:
+        await render("<!doctype html><html><body><p>warm</p></body></html>")
+        return True
+    except Exception:  # noqa: BLE001 - a warm-up failure must never block start-up
+        return False
+
+
 async def shutdown() -> None:
     global _browser, _pw
     if _browser is not None:

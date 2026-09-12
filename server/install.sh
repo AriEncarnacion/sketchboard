@@ -31,15 +31,23 @@ if [[ ! -f .chromium-installed ]]; then
   touch .chromium-installed
 fi
 
+echo "== sessions dir (outside $APP so deploys don't wipe it)"
+sudo mkdir -p /var/lib/sketchboard/sessions
+sudo chown "$USER":"$USER" /var/lib/sketchboard/sessions
+
 echo "== runtime env"
 cat > .env <<EOF
 OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=$OLLAMA_MODEL
 MAX_ITERATIONS=2
 RENDER_ENABLED=1
+SESSIONS_DIR=/var/lib/sketchboard/sessions
+PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+VIEWER_SECRET=${VIEWER_SECRET:-$GEMMA_TOKEN}
 NANGO_SECRET_KEY=${NANGO_SECRET_KEY:-}
 NANGO_INTEGRATION_ID=${NANGO_INTEGRATION_ID:-github}
 EOF
+chmod 600 .env
 
 echo "== systemd"
 sudo cp sketchboard.service /etc/systemd/system/sketchboard.service
@@ -55,6 +63,12 @@ server {
 
     location = /healthz { default_type text/plain; return 200 "ok\n"; }
     location = /readyz  { proxy_pass http://127.0.0.1:8000/readyz; }
+
+    # Public, signed viewer pages (/m/{id}?t=sig). No bearer: the signature is the key.
+    location /m/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host \$host;
+    }
 
     location /api/ {
         if (\$http_authorization != "Bearer $GEMMA_TOKEN") { return 401; }

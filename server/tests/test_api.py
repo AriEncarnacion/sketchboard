@@ -124,6 +124,23 @@ def test_bad_input(client):
     assert client.post("/api/v1/mockup", json={"image_base64": IMG, "mime": "text/html"}).status_code == 422
 
 
+def test_viewer_link_and_page(client, monkeypatch):
+    from app import config, viewer
+    monkeypatch.setattr(config, "PUBLIC_BASE_URL", "http://box:8080")
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "share-1"}))
+    info = client.get("/api/v1/session/share-1").json()
+    assert info["viewer_url"] == f"http://box:8080/m/share-1?t={viewer.sign('share-1')}"
+    # Wrong or missing signature is a 404, right one serves the HTML.
+    assert client.get("/m/share-1").status_code == 404
+    assert client.get("/m/share-1?t=deadbeef").status_code == 404
+    r = client.get(f"/m/share-1?t={viewer.sign('share-1')}")
+    assert r.status_code == 200 and "<h1>Login</h1>" in r.text   # base CSS gets injected, so not byte-equal
+    assert r.headers["content-type"].startswith("text/html")
+    # PNG render needs Chromium, which route tests stub out.
+    assert client.get("/api/v1/session/share-1/render.png").status_code == 503
+    assert client.get("/api/v1/session/nope/render.png").status_code == 404
+
+
 def test_legacy_alias(client):
     assert events(client.post("/api/mockup", json={"image_base64": IMG}))[-1]["type"] == "final"
 

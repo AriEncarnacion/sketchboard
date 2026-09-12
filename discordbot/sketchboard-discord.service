@@ -1,0 +1,15 @@
+[Unit]
+Description=Sketchboard Discord bot (gateway websocket, talks to the harness on localhost)
+After=network-online.target sketchboard.service
+Wants=network-online.target sketchboard.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/sketchboard-discord
+EnvironmentFile=/opt/sketchboard-discord/.env
+ExecStart=/opt/sketchboard-discord/.venv/bin/python bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
