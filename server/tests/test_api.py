@@ -11,6 +11,8 @@ from app.gemma import Reply
 
 DOC = "<!doctype html><html><body><h1>Login</h1><button>Go</button></body></html>"
 DOC2 = DOC.replace("Go", "Blue Go")
+from app import basecss  # noqa: E402
+FULL, FULL2 = basecss.inject(DOC), basecss.inject(DOC2)   # what the API returns: base CSS injected
 IMG = base64.b64encode(b"\xff\xd8\xff\xe0 fake jpeg").decode()
 UID = "ipad-0f8e2b9c-4d1a-4e6b-9c3d-7a5f1e2d3c4b"
 
@@ -21,6 +23,7 @@ class FakeGemma:
     model = "fake"
     calls: list[list[dict]] = []
     reply_html = DOC
+    reply_text: str | None = None   # when set, non-streaming chat() returns this verbatim
 
     async def aclose(self): ...
     async def alive(self): return True
@@ -28,7 +31,24 @@ class FakeGemma:
 
     async def chat(self, messages, **kw):
         self.calls.append(messages)
+        if self.reply_text is not None:
+            return Reply(text=self.reply_text, prompt_tokens=10, completion_tokens=5, seconds=0.05)
         return Reply(text=f"notes\n```html\n{self.reply_html}\n```", prompt_tokens=10, completion_tokens=20, seconds=0.1)
+
+    def chat_stream(self, messages, **kw):
+        """Feeds the canned reply out in small pieces, like the real endpoint."""
+        self.calls.append(messages)
+        reply = Reply(text="")
+        full = f"notes\n```html\n{self.reply_html}\n```"
+
+        async def deltas():
+            for i in range(0, len(full), 7):
+                piece = full[i:i + 7]
+                reply.text += piece
+                yield piece
+            reply.prompt_tokens, reply.completion_tokens, reply.seconds = 10, 20, 0.1
+
+        return reply, deltas()
 
 
 class FakeNango:
@@ -77,7 +97,7 @@ def test_mockup_stream_shape(client):
     types = [e["type"] for e in evs]
     assert types[0] == "session" and evs[0]["session_id"]
     assert "draft" in types and types[-1] == "final"
-    assert evs[-1]["html"] == DOC and evs[-1]["chosen"] == 0
+    assert evs[-1]["html"] == FULL and evs[-1]["chosen"] == 0
 
 
 def test_client_chosen_session_id_and_edit(client):
@@ -85,13 +105,13 @@ def test_client_chosen_session_id_and_edit(client):
     client.fake.reply_html = DOC2
     evs = events(client.post("/api/v1/edit", json={"session_id": "ipad-1", "instruction": "make the button blue"}))
     assert evs[0] == {"type": "session", "session_id": "ipad-1"}
-    assert evs[-1]["type"] == "final" and evs[-1]["html"] == DOC2
+    assert evs[-1]["type"] == "final" and evs[-1]["html"] == FULL2
     # The edit prompt carried the previous HTML and the instruction.
     prompt_text = client.fake.calls[-1][-1]["content"][0]["text"]
-    assert DOC in prompt_text and "make the button blue" in prompt_text
+    assert "<h1>Login</h1>" in prompt_text and "make the button blue" in prompt_text
     # Session now holds the edited html and the history.
     s = client.get("/api/v1/session/ipad-1").json()
-    assert s["html"] == DOC2 and s["history"] == ["make the button blue"]
+    assert s["html"] == FULL2 and s["history"] == ["make the button blue"]
 
 
 def test_edit_unknown_session(client):
@@ -108,6 +128,96 @@ def test_legacy_alias(client):
     assert events(client.post("/api/mockup", json={"image_base64": IMG}))[-1]["type"] == "final"
 
 
+def test_draft_partials_stream_before_draft(client, monkeypatch):
+    monkeypatch.setattr(harness, "PARTIAL_MIN_INTERVAL_S", 0.0)
+    monkeypatch.setattr(harness, "PARTIAL_MIN_GROWTH", 1)
+    client.fake.reply_html = '<div class="screen"><h1>Login</h1><button class="btn">Go</button></div>'
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG}))
+    types = [e["type"] for e in evs]
+    partials = [e for e in evs if e["type"] == "draft_partial"]
+    assert partials, types
+    assert types.index("draft_partial") < types.index("draft")
+    # Partials grow, each is a complete wrapped document, and each is a prefix of the
+    # final document once the closing tags the wrapper adds are removed.
+    lens = [p["chars"] for p in partials]
+    final = evs[-1]["html"]
+    assert lens == sorted(lens) and all(p["html"].endswith("</body></html>") for p in partials)
+    assert all(final.startswith(p["html"][: -len("</body></html>")]) for p in partials)
+    assert final.endswith(client.fake.reply_html + "</body></html>")
+
+
+def test_stream_false_emits_no_partials(client):
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "stream": False}))
+    assert not [e for e in evs if e["type"] == "draft_partial"]
+    assert evs[-1]["html"] == FULL
+
+
+PATCH = "<<<<<<< SEARCH\n<button>Go</button>\n=======\n<button class=\"green\">Go</button>\n>>>>>>> REPLACE"
+PATCHED = DOC.replace("<button>Go</button>", '<button class="green">Go</button>')
+FULLP = basecss.inject(PATCHED)
+
+
+def test_edit_uses_patch_when_it_applies(client):
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "p1"}))
+    client.fake.reply_text = PATCH
+    evs = events(client.post("/api/v1/edit", json={"session_id": "p1", "instruction": "make the button green"}))
+    types = [e["type"] for e in evs]
+    assert "patch" in types and "draft_partial" not in types   # fast path, no rewrite
+    draft = next(e for e in evs if e["type"] == "draft")
+    assert draft["patched"] is True and draft["html"] == FULLP
+    assert evs[-1]["html"] == FULLP
+    assert client.get("/api/v1/session/p1").json()["html"] == FULLP
+    # The patch prompt carried the current HTML and asked for SEARCH/REPLACE blocks.
+    prompt_text = client.fake.calls[-1][-1]["content"][0]["text"]
+    assert "<h1>Login</h1>" in prompt_text and "<<<<<<< SEARCH" in prompt_text
+
+
+def test_edit_falls_back_to_rewrite_when_patch_misses(client):
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "p2"}))
+    client.fake.reply_text = PATCH.replace("<button>Go</button>", "<button>Nope</button>")  # search won't match
+    client.fake.reply_html = DOC2
+    evs = events(client.post("/api/v1/edit", json={"session_id": "p2", "instruction": "x"}))
+    msgs = [e.get("message", "") for e in evs if e["type"] == "status"]
+    assert any("did not apply" in m for m in msgs)
+    draft = next(e for e in evs if e["type"] == "draft")
+    assert draft["patched"] is False and draft["html"] == FULL2   # rewrite path (streamed)
+    assert evs[-1]["html"] == FULL2
+
+
+def test_edit_patch_false_always_rewrites(client):
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "p3"}))
+    client.fake.reply_text = PATCH
+    client.fake.reply_html = DOC2
+    evs = events(client.post("/api/v1/edit", json={"session_id": "p3", "instruction": "x", "patch": False}))
+    assert "patch" not in [e["type"] for e in evs]
+    assert evs[-1]["html"] == FULL2
+
+
+FRAG = '<div class="screen"><button class="btn btn-primary">Go</button></div>'
+
+
+def test_fragment_reply_is_wrapped_with_base_css(client):
+    from app import basecss
+    client.fake.reply_html = FRAG
+    evs = events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "f1"}))
+    final = evs[-1]["html"]
+    assert final.startswith("<!doctype html>") and basecss.STYLE_ID in final and FRAG in final
+    # Partials are wrapped too, so the app always gets a renderable document.
+    assert all(basecss.STYLE_ID in e["html"] for e in evs if e["type"] == "draft_partial")
+    # The system prompt carried the class guide.
+    assert "LAYOUT" in client.fake.calls[0][0]["content"]
+
+
+def test_edit_prompt_shows_collapsed_base_css(client):
+    from app import basecss
+    client.fake.reply_html = FRAG
+    events(client.post("/api/v1/mockup", json={"image_base64": IMG, "session_id": "f2"}))
+    client.fake.reply_text = "<<<<<<< SEARCH\n<button class=\"btn btn-primary\">Go</button>\n=======\n<button class=\"btn btn-danger\">Go</button>\n>>>>>>> REPLACE"
+    evs = events(client.post("/api/v1/edit", json={"session_id": "f2", "instruction": "make it red"}))
+    prompt_text = client.fake.calls[-1][-1]["content"][0]["text"]
+    assert basecss.PLACEHOLDER in prompt_text and ".btn-primary{" not in prompt_text
+    final = evs[-1]["html"]
+    assert "btn-danger" in final and ".btn-primary{" in final   # patched, and base CSS restored
 def test_auth_session(client):
     r = client.post("/api/v1/auth/github/session", json={"user_id": UID})
     assert r.status_code == 200, r.text

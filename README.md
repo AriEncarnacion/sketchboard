@@ -2,6 +2,8 @@
 
 iPad app: sketch a UI with Apple Pencil, Gemma 4 turns it into a rendered mockup. Claude Design, but native on the iPad.
 
+New teammate? Start with [SETUP.md](SETUP.md).
+
 ## Setup (every Mac, ~10 min after Xcode is installed)
 
 1. Install Xcode 26 from the Mac App Store. Open it once and let it finish installing components.

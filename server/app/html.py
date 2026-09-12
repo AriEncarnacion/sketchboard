@@ -4,6 +4,7 @@ import re
 
 _FENCE = re.compile(r"```(?:html|HTML)?\s*\n(.*?)```", re.DOTALL)
 _DOC = re.compile(r"(<!doctype html.*?</html\s*>|<html.*?</html\s*>)", re.DOTALL | re.IGNORECASE)
+_FRAGMENT = re.compile(r"<(?:style|div|section|main|header|nav|form|ul|table)[\s>]", re.IGNORECASE)
 
 APPROVED = "APPROVED"
 
@@ -26,7 +27,39 @@ def extract_html(text: str) -> str | None:
     doc = _DOC.search(text)
     if doc:
         return doc.group(1).strip()
+    frag = _FRAGMENT.search(text)
+    if frag:
+        # Unfenced fragment: from the first block-level tag (or <style>) to the last '>'.
+        end = text.rfind(">")
+        if end > frag.start():
+            return text[frag.start():end + 1].strip()
     return None
+
+
+_PARTIAL_START = re.compile(r"```(?:html|HTML)?[ \t]*\n|<!doctype html|<html[\s>]", re.IGNORECASE)
+
+
+def partial_html(text: str) -> str | None:
+    """The HTML document so far, from a reply that is still streaming.
+
+    Starts at the opening ```html fence (or a bare <!doctype>/<html>), stops before any
+    closing fence, and trims back to the last complete tag so a half-written `<div cla`
+    never reaches the browser. None until the document has started.
+    """
+    m = _PARTIAL_START.search(text)
+    if not m:
+        return None
+    start = m.end() if m.group(0).startswith("```") else m.start()
+    body = text[start:]
+    end = body.find("```")
+    if end != -1:
+        body = body[:end]
+    else:
+        body = body.rstrip("`")  # a fence arriving one backtick at a time
+    cut = body.rfind(">")
+    if cut == -1:
+        return None
+    return body[: cut + 1].strip() or None
 
 
 def is_approved(text: str) -> bool:

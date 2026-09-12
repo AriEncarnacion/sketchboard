@@ -58,3 +58,27 @@ def test_script_error_captured(loop):
     html = "<html><body><p>x</p><p>y</p><p>z</p><p>w</p><p>v</p><script>throw new Error('boom')</script></body></html>"
     _, rep = loop.run_until_complete(render.render(html))
     assert any("boom" in e for e in rep.console_errors)
+
+
+def test_base_css_split_lays_out_side_by_side(loop):
+    """Regression: the model tends to write <div class="screen split">; that must be a row."""
+    from app import basecss
+    for cls in ("screen split", "screen light split", "screen"):
+        inner = '<div id="a" class="fill">a</div><div id="b" class="fill">b</div>'
+        html = basecss.inject(f'<div class="{cls}">' + (inner if "split" in cls else f'<div class="split">{inner}</div>') + "</div>")
+        _, rep = loop.run_until_complete(render.render(html))
+        assert not rep.overflow_x and not rep.overflow_y and rep.scroll_height <= H, rep.summary(W, H)
+        boxes = loop.run_until_complete(_boxes(html, ["#a", "#b"]))
+        a, b = boxes["#a"], boxes["#b"]
+        assert abs(a["y"] - b["y"]) < 2 and b["x"] > a["x"] + 400, (cls, boxes)
+        assert a["width"] > 500 and a["height"] > 700, (cls, boxes)
+
+
+async def _boxes(html, selectors):
+    browser = await render._get_browser()
+    page = await browser.new_page(viewport={"width": W, "height": H})
+    try:
+        await page.set_content(html)
+        return {s: await page.eval_on_selector(s, "e => { const r = e.getBoundingClientRect(); return {x: r.x, y: r.y, width: r.width, height: r.height}; }") for s in selectors}
+    finally:
+        await page.close()

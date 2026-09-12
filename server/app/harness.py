@@ -3,6 +3,8 @@
 `run()` is an async generator of event dicts so the API can stream progress:
 
   {"type": "status",  "message": "..."}
+  {"type": "draft_partial", "iteration": n, "html": "...", "chars": c}   the draft so far,
+                                                     a few times a second while the model writes
   {"type": "draft",   "iteration": n, "html": "...", "notes": "...", "tokens": ..., "seconds": ...}
   {"type": "checks",  "iteration": n, "clean": bool, "problems": "- ...", "png_base64": "..." (debug only)}
   {"type": "verdict", "iteration": n, "problems": "- ...", "seconds": ...}   judge found problems
@@ -10,33 +12,79 @@
   {"type": "final",   "html": "...", "iterations": n, "approved": bool, "chosen": i, "score": s}
                                                      `chosen` is the draft iteration returned as html
   {"type": "error",   "message": "..."}
+
+`edit()` adds:
+  {"type": "patch",   "hunks": k, "seconds": ..., "note": "..."}   a search/replace patch applied
+  and its `draft` event carries "patched": bool.
 """
 
 import base64
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from . import config, prompts, render
+from . import basecss, config, patch, prompts, render
 from .gemma import Gemma, Reply, image_part, text_part
-from .html import extract_html, is_approved
+from .html import extract_html, is_approved, partial_html
+
+# Streaming partials: at most this often, and only when the document grew by this much.
+PARTIAL_MIN_INTERVAL_S = 0.25
+PARTIAL_MIN_GROWTH = 48
+
+# A patch reply is small. If the model ignores the format and rewrites the page it will
+# hit this cap; we then detect "no patch" and do the streaming rewrite properly.
+PATCH_MAX_TOKENS = 1500
 
 
 def _system() -> dict[str, Any]:
-    return {"role": "system", "content": prompts.SYSTEM.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H)}
+    return {"role": "system", "content": prompts.SYSTEM.format(
+        width=config.VIEWPORT_W, height=config.VIEWPORT_H, guide=basecss.GUIDE)}
 
 
-async def _ask_for_html(gemma: Gemma, messages: list[dict[str, Any]], model: str | None) -> tuple[Reply, str | None]:
-    """Chat once; if the reply has no HTML, ask once more for just the document."""
-    reply = await gemma.chat(messages, model=model)
+async def _ask_for_html(
+    gemma: Gemma,
+    messages: list[dict[str, Any]],
+    model: str | None,
+    *,
+    iteration: int,
+    stream: bool = True,
+) -> AsyncIterator[dict[str, Any]]:
+    """Ask for an HTML document. Yields `draft_partial` events while the model writes,
+    then exactly one {"type": "_result", "reply": Reply, "html": str | None} which the
+    caller consumes and must not forward. If the reply has no HTML, asks once more for
+    just the document (not streamed; it's the rare path)."""
+    if stream and hasattr(gemma, "chat_stream"):
+        reply, deltas = gemma.chat_stream(messages, model=model)
+        last_emit, last_len = 0.0, 0
+        async for _ in deltas:
+            now = time.monotonic()
+            if now - last_emit < PARTIAL_MIN_INTERVAL_S:
+                continue
+            part = partial_html(reply.text)
+            if part is None or len(part) - last_len < PARTIAL_MIN_GROWTH:
+                continue
+            last_emit, last_len = now, len(part)
+            full = basecss.inject(part)
+            yield {"type": "draft_partial", "iteration": iteration, "html": full, "chars": len(full)}
+    else:
+        reply = await gemma.chat(messages, model=model)
+
     html = extract_html(reply.text)
     if html is None and not is_approved(reply.text):
-        messages = messages + [
+        retry = messages + [
             {"role": "assistant", "content": reply.text},
             {"role": "user", "content": prompts.REPAIR},
         ]
-        reply = await gemma.chat(messages, model=model, temperature=0.2)
+        reply = await gemma.chat(retry, model=model, temperature=0.2)
         html = extract_html(reply.text)
-    return reply, html
+    # Model output is a fragment (or a stripped document); everything downstream
+    # works on the full document with the base stylesheet in place.
+    yield {"type": "_result", "reply": reply, "html": basecss.inject(html) if html else None}
+
+
+def _looks_like_problems(text: str) -> bool:
+    """A judge reply we can act on: at least one bullet line."""
+    return any(line.strip().startswith(("-", "*", "•")) for line in text.splitlines())
 
 
 def _notes(text: str, html: str | None) -> str:
@@ -44,6 +92,13 @@ def _notes(text: str, html: str | None) -> str:
     if html and html in text:
         return text.split(html, 1)[0].replace("```html", "").replace("```", "").strip()
     return text.strip()[:2000]
+
+
+def _draft_event(iteration: int, reply: Reply, html: str) -> dict[str, Any]:
+    return {
+        "type": "draft", "iteration": iteration, "html": html, "notes": _notes(reply.text, html),
+        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
+    }
 
 
 async def run(
@@ -54,6 +109,7 @@ async def run(
     *,
     max_iterations: int | None = None,
     model: str | None = None,
+    stream: bool = True,
     debug: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
     iters = config.MAX_ITERATIONS if max_iterations is None else max(0, max_iterations)
@@ -66,14 +122,17 @@ async def run(
         _system(),
         {"role": "user", "content": [text_part(prompts.DRAFT.format(description=description)), sketch_img]},
     ]
-    reply, html = await _ask_for_html(gemma, messages, model)
+    reply: Reply
+    html: str | None = None
+    async for ev in _ask_for_html(gemma, messages, model, iteration=0, stream=stream):
+        if ev["type"] == "_result":   # always the last event; let the generator finish
+            reply, html = ev["reply"], ev["html"]
+        else:
+            yield ev
     if html is None:
         yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
         return
-    yield {
-        "type": "draft", "iteration": 0, "html": html, "notes": _notes(reply.text, html),
-        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
-    }
+    yield _draft_event(0, reply, html)
 
     if not render.available():
         if iters > 0:
@@ -105,10 +164,21 @@ async def run(
         checks = (prompts.CHECKS_HEADER + checks_text + "\n") if checks_text else prompts.CHECKS_CLEAN
         judge = prompts.JUDGE.format(width=config.VIEWPORT_W, height=config.VIEWPORT_H,
                                      description=description, checks=checks)
-        verdict = await gemma.chat(
-            [_system(), {"role": "user", "content": [text_part(judge), sketch_img, image_part(png, "image/png")]}],
-            model=model, max_tokens=400, temperature=0.1,
-        )
+        # Label the images inline: without labels the model occasionally claims the
+        # second image is missing even though it was delivered.
+        judge_msgs = [_system(), {"role": "user", "content": [
+            text_part("Image 1, the hand-drawn sketch:"), sketch_img,
+            text_part("Image 2, the rendered mockup screenshot:"), image_part(png, "image/png"),
+            text_part(judge),
+        ]}]
+        verdict = await gemma.chat(judge_msgs, model=model, max_tokens=400, temperature=0.1)
+        if not is_approved(verdict.text) and not _looks_like_problems(verdict.text):
+            # Not a verdict (e.g. "please provide the screenshot"). One retry, then fall back.
+            verdict = await gemma.chat(judge_msgs, model=model, max_tokens=400, temperature=0.3)
+            if not is_approved(verdict.text) and not _looks_like_problems(verdict.text):
+                yield {"type": "status", "message": "judge gave no verdict, using automated checks only"}
+                verdict.text = ("APPROVED" if not checks_text
+                                else "\n".join(f"- {l.lstrip('- ')}" for l in checks_text.splitlines()))
         if is_approved(verdict.text):
             approved_at = n
             scored.append((0, n, html))
@@ -128,17 +198,19 @@ async def run(
 
         # Revise: fix exactly the listed problems.
         yield {"type": "status", "message": f"revising draft {n}"}
-        revise = prompts.REVISE.format(html=html, problems=problems)
+        revise = prompts.REVISE.format(html=basecss.strip(html), problems=problems, doc_note=prompts.DOC_NOTE)
         messages = [_system(), {"role": "user", "content": [text_part(revise), sketch_img]}]
-        reply, new_html = await _ask_for_html(gemma, messages, model)
+        new_html: str | None = None
+        async for ev in _ask_for_html(gemma, messages, model, iteration=n + 1, stream=stream):
+            if ev["type"] == "_result":
+                reply, new_html = ev["reply"], ev["html"]
+            else:
+                yield ev
         if new_html is None:
             yield {"type": "status", "message": "revision returned no HTML, keeping previous draft"}
             break
         html = new_html
-        yield {
-            "type": "draft", "iteration": n + 1, "html": html, "notes": _notes(reply.text, html),
-            "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
-        }
+        yield _draft_event(n + 1, reply, html)
 
     # Best score wins; on a tie prefer the later draft (it had the fix applied).
     best_score, best_n, best_html = min(scored, key=lambda s: (s[0], -s[1]))
@@ -156,24 +228,59 @@ async def edit(
     history: list[str],
     *,
     model: str | None = None,
+    stream: bool = True,
+    patch_first: bool = True,
     debug: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Apply one follow-up instruction to an existing mockup. Single revise call plus a
-    render + checks pass so the client gets the same event shapes as `run()`."""
+    """Apply one follow-up instruction to an existing mockup. A patch call (fast) or a
+    full rewrite (fallback), then a render + checks pass so the client gets the same
+    event shapes as `run()`."""
     description = description.strip() or "(none)"
     hist = prompts.EDIT_HISTORY.format(items="\n".join(f"- {h}" for h in history)) if history else ""
-    prompt = prompts.EDIT.format(html=html, description=description, history=hist, instruction=instruction.strip())
+    sketch_img = image_part(sketch, mime)
+    reply: Reply
+    new_html: str | None = None
+    patched = False
+    shown = basecss.strip(html)   # what the model reads and patches; base CSS collapsed
 
-    yield {"type": "status", "message": f"editing with {model or gemma.model}"}
-    messages = [_system(), {"role": "user", "content": [text_part(prompt), image_part(sketch, mime)]}]
-    reply, new_html = await _ask_for_html(gemma, messages, model)
+    # Fast path: ask for a search/replace patch. A few hundred output tokens instead of
+    # the whole page. Falls through to a full rewrite if the model rewrites anyway, or the
+    # patch doesn't apply cleanly.
+    if patch_first:
+        yield {"type": "status", "message": f"patching with {model or gemma.model}"}
+        prompt = prompts.EDIT_PATCH.format(html=shown, description=description, history=hist,
+                                           instruction=instruction.strip())
+        reply = await gemma.chat([_system(), {"role": "user", "content": [text_part(prompt), sketch_img]}],
+                                 model=model, max_tokens=PATCH_MAX_TOKENS, temperature=0.2)
+        hunks = patch.parse(reply.text)
+        if hunks:
+            patched_doc, note = patch.apply(shown, hunks)
+            if patched_doc is None:
+                yield {"type": "status", "message": f"patch did not apply ({note}), rewriting"}
+            else:
+                new_html = basecss.inject(patched_doc)
+                patched = True
+                yield {"type": "patch", "hunks": len(hunks), "seconds": round(reply.seconds, 1), "note": note}
+        else:
+            rewritten = extract_html(reply.text)   # the model chose to rewrite
+            new_html = basecss.inject(rewritten) if rewritten else None
+            if new_html is None:
+                yield {"type": "status", "message": "no patch in reply, rewriting"}
+
     if new_html is None:
-        yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
-        return
-    yield {
-        "type": "draft", "iteration": 0, "html": new_html, "notes": _notes(reply.text, new_html),
-        "tokens": reply.prompt_tokens + reply.completion_tokens, "seconds": round(reply.seconds, 1),
-    }
+        yield {"type": "status", "message": f"editing with {model or gemma.model}"}
+        prompt = prompts.EDIT.format(html=shown, description=description, history=hist,
+                                     instruction=instruction.strip(), doc_note=prompts.DOC_NOTE)
+        messages = [_system(), {"role": "user", "content": [text_part(prompt), sketch_img]}]
+        async for ev in _ask_for_html(gemma, messages, model, iteration=0, stream=stream):
+            if ev["type"] == "_result":
+                reply, new_html = ev["reply"], ev["html"]
+            else:
+                yield ev
+        if new_html is None:
+            yield {"type": "error", "message": "model did not return HTML", "raw": reply.text[:2000]}
+            return
+    yield {**_draft_event(0, reply, new_html), "patched": patched}
 
     score = 0
     if render.available():
